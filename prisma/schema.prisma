@@ -1,0 +1,106 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// A person who logs into the Foundry admin tool.
+model User {
+  id                Int       @id @default(autoincrement())
+  email             String    @unique
+  passwordHash      String
+
+  emailVerified     Boolean   @default(false)
+  verificationCode  String?
+  codeExpiresAt     DateTime?
+
+  refreshTokenHash  String?
+
+  createdAt         DateTime  @default(now())
+}
+
+// ============================================================
+// Employee data — the actual records being managed, validated,
+// and (eventually) matched against job openings.
+// ============================================================
+
+model Employee {
+  id              Int      @id @default(autoincrement())
+  fullName        String
+  phone           String?
+  birthDate       String?
+  nationality     String?
+  maritalStatus   String?
+  email           String?
+  workLocation    String?
+  gender          String?
+  nationalId      String?
+  militaryStatus  String?
+  createdAt       DateTime @default(now())
+
+  // These four are the "one employee, many entries" relationships —
+  // Prisma calls this a one-to-many relation. Each array field here
+  // doesn't store data itself; it just tells Prisma "look these up
+  // from the child table whenever asked."
+  experience   Experience[]
+  education    Education[]
+  certificates Certificate[]
+  skills       Skill[]
+}
+
+model Experience {
+  id          Int      @id @default(autoincrement())
+  jobTitle    String
+  company     String
+  startDate   String
+  endDate     String
+  description String?
+
+  // This is the actual foreign key — the column that stores WHICH
+  // employee this row belongs to. onDelete: Cascade means deleting
+  // an employee automatically deletes their experience rows too,
+  // instead of leaving orphaned data behind.
+  employeeId Int
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+}
+
+model Education {
+  id              Int      @id @default(autoincrement())
+  degree          String
+  fieldOfStudy    String
+  institution     String
+  graduationYear  Int
+  gpa             Float?   // optional — excluded from health scoring, as decided
+
+  employeeId Int
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+}
+
+model Certificate {
+  id          Int      @id @default(autoincrement())
+  certName    String
+  issuer      String
+  issueDate   String
+  expiryDate  String?  // optional — excluded from health scoring, as decided
+
+  employeeId Int
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+}
+
+model Skill {
+  id           Int    @id @default(autoincrement())
+  category     String // "technical" or "language"
+  name         String
+  proficiency  Int
+
+  employeeId Int
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+}

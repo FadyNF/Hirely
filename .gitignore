@@ -32,6 +32,14 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
+
+# local sqlite database — each dev generates their own via
+# `npx prisma migrate dev && npx prisma db seed`, not shared through git
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
 
 # vercel
 .vercel
@@ -39,3 +47,5 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+/lib/generated/prisma

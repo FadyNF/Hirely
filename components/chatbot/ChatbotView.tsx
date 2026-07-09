@@ -1,0 +1,886 @@
+'use client';
+
+// components/chatbot/ChatbotView.tsx
+//
+// Visual structure ported from their real ChatArea.tsx — welcome screen,
+// avatar + bubble message layout, typing indicator, input console — with
+// everything voice/attachment/Excel/avatar-customization related left out,
+// since none of that applies to a CRUD-only employee data assistant.
+// Every piece of OUR logic (extraction, resolution, one-by-one field
+// collection, disambiguation, confirmation) is unchanged from before.
+
+import { useState, useRef, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
+import Image from 'next/image';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import {
+  faFire, faRobot, faPaperPlane, faCheck, faXmark,
+  faUserPlus, faUserPen, faCircleQuestion, faIdCard,
+  faBriefcase, faGraduationCap, faCertificate, faBolt,
+} from '@fortawesome/free-solid-svg-icons';
+import { BASIC_INFO_FIELDS, BASIC_INFO_LABELS } from '@/lib/tabConfig';
+import { useAuth } from '@/context/AuthContext';
+
+const RELATION_LABELS: Record<string, string> = {
+  experience: 'Experience', education: 'Education',
+  certificates: 'Certificates', skills: 'Skills',
+};
+const RELATION_KEYS = Object.keys(RELATION_LABELS);
+
+const COLORS = {
+  red: '#DC2626',
+  redDark: '#B91C1C',
+  black: '#111111',
+  gray: '#6B7280',
+  pinkBg: '#FEE2E2',
+  border: '#E5E5E5',
+};
+
+interface EmployeeMatch {
+  id: number;
+  fullName: string;
+  email: string | null;
+  nationalId: string | null;
+}
+
+interface ExtractResponse {
+  action: 'create' | 'update' | 'disambiguate' | 'unsupported' | 'needsInfo' | 'invalidField' | 'info' | 'disambiguateRead' | 'confirmIdentity' | 'askIdentity';
+  matches?: EmployeeMatch[];
+  data?: Record<string, unknown>;
+  field?: string;
+  reason?: string;
+  warnings?: string[];
+  message?: string;
+  found?: boolean;
+  employee?: Record<string, unknown>;
+  requestedFields?: string[];
+  suggestedEmployee?: { id: number; fullName: string };
+}
+
+const FIELD_QUESTIONS: Record<string, string> = {
+  fullName: "What's the employee's full name?",
+  phone: "What's their phone number? (11 digits, e.g. 01012345678)",
+  birthDate: "What's their birth date? (YYYY-MM-DD)",
+  nationality: "What's their nationality?",
+  maritalStatus: "What's their marital status? (Single, Married, Divorced, or Widowed)",
+  email: "What's their email address?",
+  workLocation: "Where do they work?",
+  gender: "What's their gender? (Male or Female)",
+  nationalId: "What's their National ID? (exactly 14 digits)",
+  militaryStatus: "What's their military status? (Exempted, Completed, Postponed, or Not Applicable)",
+};
+
+interface Message {
+  id: string;
+  role: 'user' | 'bot';
+  text?: string;
+  pending?: ExtractResponse;
+  timestamp: string;
+}
+
+function genId() {
+  return Math.random().toString(36).slice(2);
+}
+
+function nowTimestamp() {
+  return new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+}
+
+function summarizeData(data: Record<string, unknown>) {
+  const lines: string[] = [];
+  for (const [key, label] of Object.entries(BASIC_INFO_LABELS)) {
+    if (data[key]) lines.push(`${label}: ${data[key]}`);
+  }
+  if (Array.isArray(data.experience) && data.experience.length) {
+    lines.push(`Experience: +${data.experience.length} entr${data.experience.length > 1 ? 'ies' : 'y'}`);
+  }
+  if (Array.isArray(data.education) && data.education.length) {
+    lines.push(`Education: +${data.education.length} entr${data.education.length > 1 ? 'ies' : 'y'}`);
+  }
+  if (Array.isArray(data.certificates) && data.certificates.length) {
+    lines.push(`Certificates: +${data.certificates.length} entr${data.certificates.length > 1 ? 'ies' : 'y'}`);
+  }
+  if (Array.isArray(data.skills) && data.skills.length) {
+    lines.push(`Skills: +${data.skills.length} entr${data.skills.length > 1 ? 'ies' : 'y'}`);
+  }
+  return lines;
+}
+
+const RELATION_ICONS = {
+  experience: faBriefcase, education: faGraduationCap,
+  certificates: faCertificate, skills: faBolt,
+} as const;
+
+// Some existing records have the literal string "null" (or "undefined")
+// stored instead of a real NULL — leftover from data that reached the
+// database without going through validateFieldValue (e.g. direct writes
+// to /api/chatbot/commit). Treat those the same as a genuinely empty
+// value rather than displaying the word "null" as if it were real data.
+function isBlankValue(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim().toLowerCase();
+  return trimmed.length === 0 || trimmed === 'null' || trimmed === 'undefined';
+}
+
+// ---- Profile display (the "info" lookup card) ----
+// Separate from summarizeData (used for create/update proposals, which
+// only lists fields actually being SET) — this is for "tell me about X" /
+// "what's his Y" answers, where blanks should be visible as "missing"
+// rather than silently dropped.
+
+function ProfileFieldGrid({ employee, fields }: { employee: Record<string, unknown>; fields: string[] }) {
+  return (
+    <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+      {fields.map((key) => {
+        const raw = employee[key];
+        const value = isBlankValue(raw) ? null : String(raw);
+        return (
+          <div key={key} className="min-w-0">
+            <p className="text-[10.5px] font-semibold uppercase tracking-wide mb-0.5" style={{ color: '#9CA3AF' }}>
+              {BASIC_INFO_LABELS[key] ?? key}
+            </p>
+            <p className="text-sm truncate" style={value ? { color: COLORS.black } : { color: '#B0B4BB', fontStyle: 'italic' }}>
+              {value ?? 'missing'}
+            </p>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function RelationBadges({ employee, keys }: { employee: Record<string, unknown>; keys: string[] }) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {keys.map((key) => {
+        const arr = employee[key];
+        const count = Array.isArray(arr) ? arr.length : 0;
+        return (
+          <span
+            key={key}
+            className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full"
+            style={count
+              ? { backgroundColor: COLORS.pinkBg, color: COLORS.red }
+              : { backgroundColor: '#F3F4F6', color: '#9CA3AF', fontStyle: 'italic' }}
+          >
+            <FontAwesomeIcon icon={RELATION_ICONS[key as keyof typeof RELATION_ICONS]} className="text-[10px]" />
+            {RELATION_LABELS[key]}: {count ? `+${count}` : 'missing'}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+// The admin asked about a relation BY NAME ("show me his experience") —
+// so show the actual entries, not just how many there are.
+function relationEntrySummary(key: string, entry: Record<string, unknown>): { title: string; subtitle?: string; meta?: string } {
+  const clean = (v: unknown) => (isBlankValue(v) ? undefined : v);
+  const join = (parts: unknown[], sep: string) => parts.map(clean).filter(Boolean).join(sep) || undefined;
+
+  switch (key) {
+    case 'experience':
+      return {
+        title: join([entry.jobTitle, entry.company], ' at ') ?? 'Untitled role',
+        subtitle: join([entry.startDate, entry.endDate], ' – '),
+        meta: clean(entry.description) as string | undefined,
+      };
+    case 'education':
+      return {
+        title: join([entry.degree, entry.fieldOfStudy], ', ') ?? 'Untitled degree',
+        subtitle: join([entry.institution, entry.graduationYear], ' · '),
+        meta: entry.gpa != null ? `GPA: ${entry.gpa}` : undefined,
+      };
+    case 'certificates':
+      return {
+        title: (clean(entry.certName) as string | undefined) ?? 'Untitled certificate',
+        subtitle: clean(entry.issuer) ? `Issued by ${entry.issuer}` : undefined,
+        meta: [
+          !isBlankValue(entry.issueDate) ? `Issued ${entry.issueDate}` : null,
+          !isBlankValue(entry.expiryDate) ? `Expires ${entry.expiryDate}` : null,
+        ].filter(Boolean).join(' · ') || undefined,
+      };
+    default: // skills
+      return {
+        title: (clean(entry.name) as string | undefined) ?? 'Untitled skill',
+        subtitle: entry.category === 'technical' ? 'Technical' : entry.category === 'language' ? 'Language' : undefined,
+        meta: entry.proficiency != null ? `Proficiency: ${entry.proficiency}%` : undefined,
+      };
+  }
+}
+
+function RelationDetail({ relationKey, employee }: { relationKey: string; employee: Record<string, unknown> }) {
+  const entries = (employee[relationKey] as Record<string, unknown>[]) || [];
+  return (
+    <div>
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <FontAwesomeIcon icon={RELATION_ICONS[relationKey as keyof typeof RELATION_ICONS]} className="text-[11px]" style={{ color: COLORS.red }} />
+        <p className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: '#9CA3AF' }}>
+          {RELATION_LABELS[relationKey]}
+        </p>
+      </div>
+      {entries.length === 0 ? (
+        <p className="text-sm italic" style={{ color: '#B0B4BB' }}>missing — nothing on file</p>
+      ) : (
+        <div className="space-y-1.5">
+          {entries.map((entry, i) => {
+            const { title, subtitle, meta } = relationEntrySummary(relationKey, entry);
+            return (
+              <div key={i} className="rounded-lg px-3 py-2" style={{ backgroundColor: '#F9FAFB', border: `1px solid ${COLORS.border}` }}>
+                <p className="text-sm font-medium" style={{ color: COLORS.black }}>{title}</p>
+                {subtitle && <p className="text-xs" style={{ color: COLORS.gray }}>{subtitle}</p>}
+                {meta && <p className="text-[11px] mt-0.5" style={{ color: '#9CA3AF' }}>{meta}</p>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- ConfirmationCard: UNCHANGED logic from before, every action variant ----
+
+function ConfirmationCard({
+  pending, onConfirm, onCancel, onPickEmployee, onCreateAnyway, onPickForInfo, onConfirmIdentity,
+}: {
+  pending: ExtractResponse;
+  onConfirm: (employeeId?: number) => void;
+  onCancel: () => void;
+  onPickEmployee: (id: number) => void;
+  onCreateAnyway: () => void;
+  onPickForInfo: (id: number) => void;
+  onConfirmIdentity: (confirmed: boolean) => void;
+}) {
+  if (pending.action === 'unsupported') {
+    return (
+      <div className="rounded-lg border p-4 text-sm" style={{ borderColor: COLORS.border, color: COLORS.gray }}>
+        {pending.message}
+      </div>
+    );
+  }
+
+  // Deterministic fallback: we couldn't resolve who this is about, but
+  // we DO know who this conversation was last discussing — a real
+  // memory, not a hopeful guess baked into one giant extraction call.
+  if (pending.action === 'confirmIdentity' && pending.suggestedEmployee) {
+    return (
+      <div className="rounded-xl border bg-white p-4" style={{ borderColor: COLORS.border }}>
+        <div className="flex items-center gap-2 mb-3">
+          <FontAwesomeIcon icon={faCircleQuestion} style={{ color: COLORS.red }} />
+          <p className="text-sm font-medium" style={{ color: COLORS.black }}>
+            Did you mean {pending.suggestedEmployee.fullName} — who we were just discussing?
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => onConfirmIdentity(true)}
+            className="flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg text-white transition-opacity hover:opacity-90"
+            style={{ backgroundColor: COLORS.red }}
+          >
+            <FontAwesomeIcon icon={faCheck} className="text-xs" />
+            Yes, that's who I mean
+          </button>
+          <button
+            onClick={() => onConfirmIdentity(false)}
+            className="flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg border transition-colors hover:bg-gray-50"
+            style={{ borderColor: COLORS.border, color: COLORS.gray }}
+          >
+            No, someone else
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // No fallback available either — genuinely ask, rather than guess.
+  if (pending.action === 'askIdentity') {
+    return (
+      <div className="rounded-lg border p-4 text-sm" style={{ borderColor: COLORS.border, color: COLORS.gray }}>
+        I'm not sure who you mean — could you tell me their name or ID?
+      </div>
+    );
+  }
+
+  if (pending.action === 'info') {
+    if (!pending.found || !pending.employee) {
+      return (
+        <div className="rounded-lg border p-4 text-sm" style={{ borderColor: COLORS.border, color: COLORS.gray }}>
+          No employee found matching that.
+        </div>
+      );
+    }
+    const e = pending.employee;
+    const requested = pending.requestedFields ?? [];
+    const isFullProfile = requested.length === 0;
+    const scalarFields = isFullProfile ? [...BASIC_INFO_FIELDS] : requested.filter((f) => !RELATION_KEYS.includes(f));
+    const relationFields = isFullProfile ? [] : requested.filter((f) => RELATION_KEYS.includes(f));
+
+    return (
+      <div className="rounded-xl border bg-white overflow-hidden shadow-sm" style={{ borderColor: COLORS.border }}>
+        <div
+          className="px-4 py-3 flex items-center gap-3"
+          style={{ background: `linear-gradient(135deg, ${COLORS.redDark}, ${COLORS.red})` }}
+        >
+          <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0" style={{ backgroundColor: 'rgba(255,255,255,0.2)' }}>
+            <FontAwesomeIcon icon={faIdCard} className="text-white text-sm" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-white font-semibold text-sm truncate">{String(e.fullName)}</p>
+            <p className="text-[11px]" style={{ color: 'rgba(255,255,255,0.8)' }}>Employee ID #{String(e.id)}</p>
+          </div>
+        </div>
+        <div className="p-4 space-y-4">
+          {scalarFields.length > 0 && <ProfileFieldGrid employee={e} fields={scalarFields} />}
+          {isFullProfile && <RelationBadges employee={e} keys={RELATION_KEYS} />}
+          {relationFields.map((key) => <RelationDetail key={key} relationKey={key} employee={e} />)}
+        </div>
+      </div>
+    );
+  }
+
+  if (pending.action === 'disambiguateRead' && pending.matches) {
+    return (
+      <div className="rounded-xl border bg-white p-4" style={{ borderColor: COLORS.border }}>
+        <p className="text-sm font-medium mb-3" style={{ color: COLORS.black }}>
+          Found {pending.matches.length} employees with that name — which one?
+        </p>
+        <div className="space-y-2">
+          {pending.matches.map((m) => (
+            <button
+              key={m.id}
+              onClick={() => onPickForInfo(m.id)}
+              className="w-full text-left px-3 py-2.5 rounded-lg border transition-colors hover:bg-gray-50"
+              style={{ borderColor: COLORS.border }}
+            >
+              <span className="text-sm font-medium" style={{ color: COLORS.black }}>{m.fullName}</span>
+              <span className="text-xs ml-2" style={{ color: COLORS.gray }}>
+                ID #{m.id} · {m.email || 'no email on file'}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (pending.action === 'needsInfo' && pending.field) {
+    return (
+      <div className="rounded-xl border bg-white p-4" style={{ borderColor: COLORS.border }}>
+        <div className="flex items-center gap-2 mb-2">
+          <FontAwesomeIcon icon={faCircleQuestion} style={{ color: COLORS.red }} />
+          <p className="text-sm font-medium" style={{ color: COLORS.black }}>
+            {FIELD_QUESTIONS[pending.field] ?? `What's the ${BASIC_INFO_LABELS[pending.field]}?`}
+          </p>
+        </div>
+        <p className="text-xs mb-3" style={{ color: COLORS.gray }}>
+          Type "skip" to leave this blank for now.
+        </p>
+        <button
+          onClick={onCreateAnyway}
+          className="text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors hover:bg-gray-50"
+          style={{ borderColor: COLORS.border, color: COLORS.gray }}
+        >
+          Create anyway, with what I've got
+        </button>
+      </div>
+    );
+  }
+
+  if (pending.action === 'invalidField' && pending.field) {
+    return (
+      <div className="rounded-xl border bg-white p-4" style={{ borderColor: COLORS.border }}>
+        <div className="rounded-lg p-2.5 mb-3" style={{ backgroundColor: COLORS.pinkBg }}>
+          <p className="text-xs" style={{ color: COLORS.red }}>{pending.reason}</p>
+        </div>
+        <p className="text-sm font-medium mb-3" style={{ color: COLORS.black }}>
+          {FIELD_QUESTIONS[pending.field] ?? `What's the ${BASIC_INFO_LABELS[pending.field]}?`}
+        </p>
+        <button
+          onClick={onCreateAnyway}
+          className="text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors hover:bg-gray-50"
+          style={{ borderColor: COLORS.border, color: COLORS.gray }}
+        >
+          Create anyway, with what I've got
+        </button>
+      </div>
+    );
+  }
+
+  if (pending.action === 'disambiguate' && pending.matches) {
+    return (
+      <div className="rounded-xl border bg-white p-4" style={{ borderColor: COLORS.border }}>
+        <p className="text-sm font-medium mb-3" style={{ color: COLORS.black }}>
+          Found {pending.matches.length} employees with that name — which one do you mean?
+        </p>
+        <div className="space-y-2">
+          {pending.matches.map((m) => (
+            <button
+              key={m.id}
+              onClick={() => onPickEmployee(m.id)}
+              className="w-full text-left px-3 py-2.5 rounded-lg border transition-colors hover:bg-gray-50"
+              style={{ borderColor: COLORS.border }}
+            >
+              <span className="text-sm font-medium" style={{ color: COLORS.black }}>{m.fullName}</span>
+              <span className="text-xs ml-2" style={{ color: COLORS.gray }}>
+                ID #{m.id} · {m.email || 'no email on file'}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const isCreate = pending.action === 'create';
+  const matchedEmployee = pending.matches?.[0];
+  const summary = summarizeData(pending.data || {});
+
+  return (
+    <div className="rounded-xl border bg-white p-4" style={{ borderColor: COLORS.border }}>
+      <div className="flex items-center gap-2 mb-3">
+        <FontAwesomeIcon icon={isCreate ? faUserPlus : faUserPen} style={{ color: COLORS.red }} />
+        <p className="text-sm font-medium" style={{ color: COLORS.black }}>
+          {isCreate ? 'This looks like a new employee' : `Update ${matchedEmployee?.fullName}?`}
+        </p>
+      </div>
+      {!isCreate && matchedEmployee && (
+        <p className="text-xs mb-2" style={{ color: COLORS.gray }}>
+          Matched existing record: ID #{matchedEmployee.id} · {matchedEmployee.email || 'no email on file'}
+        </p>
+      )}
+      {pending.warnings && pending.warnings.length > 0 && (
+        <div className="rounded-lg p-2.5 mb-2 space-y-1" style={{ backgroundColor: COLORS.pinkBg }}>
+          {pending.warnings.map((w, i) => (
+            <p key={i} className="text-xs" style={{ color: COLORS.red }}>{w}</p>
+          ))}
+        </div>
+      )}
+      <div className="rounded-lg p-3 mb-3 space-y-1" style={{ backgroundColor: '#F9FAFB' }}>
+        {summary.length === 0 ? (
+          <p className="text-xs" style={{ color: COLORS.gray }}>No recognizable fields were extracted.</p>
+        ) : (
+          summary.map((line, i) => <p key={i} className="text-xs" style={{ color: COLORS.gray }}>{line}</p>)
+        )}
+      </div>
+      <div className="flex gap-2">
+        <button
+          onClick={() => onConfirm(matchedEmployee?.id)}
+          className="flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg text-white transition-opacity hover:opacity-90"
+          style={{ backgroundColor: COLORS.red }}
+        >
+          <FontAwesomeIcon icon={faCheck} className="text-xs" />
+          {isCreate ? 'Create employee' : 'Confirm update'}
+        </button>
+        <button
+          onClick={onCancel}
+          className="flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg border transition-colors hover:bg-gray-50"
+          style={{ borderColor: COLORS.border, color: COLORS.gray }}
+        >
+          <FontAwesomeIcon icon={faXmark} className="text-xs" />
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---- Quick-action starter prompts for the welcome screen ----
+// Unlike theirs (which auto-sends a canned message), these just PREFILL
+// the textarea — lookups and updates genuinely need a real name typed
+// in, so auto-sending an incomplete phrase wouldn't be useful here.
+const QUICK_ACTIONS = [
+  { label: 'Add a new hire', icon: faUserPlus, prefill: 'Add a new hire, ' },
+  { label: 'Look up an employee', icon: faIdCard, prefill: 'Is there an employee named ' },
+  { label: "Update someone's info", icon: faUserPen, prefill: 'Update ' },
+];
+
+export default function ChatbotView() {
+  const { authFetch } = useAuth();
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [pendingCreateDraft, setPendingCreateDraft] = useState<Record<string, unknown> | null>(null);
+  const [pendingCreateField, setPendingCreateField] = useState<string | null>(null);
+  // Real, deterministic memory of who this conversation last resolved
+  // to — NOT hoping the LLM infers it correctly from a wall of history
+  // text. We know for certain who was found/confirmed in prior turns,
+  // since our own code did the resolving. Used as a fallback suggestion
+  // when a follow-up reference (like "his") can't otherwise be resolved.
+  const [lastEmployee, setLastEmployee] = useState<{ id: number; fullName: string } | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, isLoading]);
+
+  // No user messages yet -> show the centered welcome screen instead of
+  // the normal scrolling chat view. Replaces the old static intro bubble.
+  const showWelcome = messages.filter((m) => m.role === 'user').length === 0;
+
+  const appendMessage = (msg: Omit<Message, 'timestamp'>) =>
+    setMessages((prev) => [...prev, { ...msg, timestamp: nowTimestamp() }]);
+
+  const MAX_HISTORY_MESSAGES = 12;
+
+  const summarizeForHistory = (m: Message): string => {
+    if (m.text) return m.text;
+    const p = m.pending;
+    if (!p) return '';
+    switch (p.action) {
+      case 'unsupported': return p.message || 'Declined an out-of-scope request.';
+      case 'info': return p.found ? `Found employee: ${p.employee?.fullName}.` : 'No matching employee found.';
+      case 'needsInfo': return `Asked the admin for the missing "${p.field}" field.`;
+      case 'invalidField': return `Asked the admin to re-enter "${p.field}": ${p.reason}`;
+      case 'disambiguate':
+      case 'disambiguateRead': return 'Found multiple employees with that name and asked which one was meant.';
+      case 'create': return 'Proposed creating a new employee record, awaiting confirmation.';
+      case 'update': return 'Proposed updating an employee record, awaiting confirmation.';
+      default: return 'Responded with a structured prompt.';
+    }
+  };
+
+  const buildHistory = () =>
+    messages
+      .slice(-MAX_HISTORY_MESSAGES)
+      .map((m) => ({ role: m.role === 'user' ? 'user' : 'model', text: summarizeForHistory(m) }));
+
+  const handleSend = async () => {
+    const text = input.trim();
+    if (!text || isLoading) return;
+
+    appendMessage({ id: genId(), role: 'user', text });
+    setInput('');
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    setIsLoading(true);
+
+    try {
+      const res = await authFetch('/api/chatbot/extract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: text,
+          existingDraft: pendingCreateDraft || undefined,
+          expectedField: pendingCreateField || undefined,
+          history: pendingCreateField ? undefined : buildHistory(),
+          lastEmployee: pendingCreateField ? undefined : lastEmployee,
+        }),
+      });
+      const result = await res.json();
+
+      if (!res.ok) {
+        appendMessage({ id: genId(), role: 'bot', text: `Something went wrong: ${result.error || 'please try again.'}` });
+        return;
+      }
+
+      // Update our real memory of who's being discussed, whenever a
+      // response resolves to exactly one specific person.
+      if (result.action === 'update' && result.matches?.[0]) {
+        setLastEmployee({ id: result.matches[0].id, fullName: result.matches[0].fullName });
+      } else if (result.action === 'info' && result.found && result.employee) {
+        setLastEmployee({ id: result.employee.id as number, fullName: result.employee.fullName as string });
+      }
+
+      if (result.action === 'needsInfo' || result.action === 'invalidField') {
+        setPendingCreateDraft(result.data || pendingCreateDraft);
+        setPendingCreateField(result.field || null);
+      } else {
+        setPendingCreateDraft(null);
+        setPendingCreateField(null);
+      }
+
+      appendMessage({ id: genId(), role: 'bot', pending: result });
+    } catch {
+      appendMessage({ id: genId(), role: 'bot', text: 'Something went wrong reaching the extraction service.' });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleCreateAnyway = (messageId: string) => {
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== messageId || !m.pending) return m;
+        return { ...m, pending: { action: 'create', matches: [], data: m.pending.data } };
+      })
+    );
+    setPendingCreateDraft(null);
+    setPendingCreateField(null);
+  };
+
+  const handlePickEmployee = (messageId: string, employeeId: number) => {
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== messageId || !m.pending) return m;
+        const picked = m.pending.matches?.find((e) => e.id === employeeId);
+        if (picked) setLastEmployee({ id: picked.id, fullName: picked.fullName });
+        return { ...m, pending: { action: 'update', matches: picked ? [picked] : [], data: m.pending.data } };
+      })
+    );
+  };
+
+  // The disambiguate picker only ever has the thin id/fullName/email/
+  // nationalId shape used for name matching — showing that as if it were
+  // the whole profile would make real data (phone, birth date, etc.)
+  // look "missing" once summarizeProfile started labeling blanks. So a
+  // pick here fetches the real record instead of reusing the thin one.
+  const handlePickForInfo = async (messageId: string, employeeId: number) => {
+    const message = messages.find((m) => m.id === messageId);
+    const picked = message?.pending?.matches?.find((e) => e.id === employeeId);
+    const requestedFields = message?.pending?.requestedFields;
+    if (!picked) return;
+
+    setLastEmployee({ id: picked.id, fullName: picked.fullName });
+    try {
+      const res = await authFetch(`/api/chatbot/employee/${employeeId}`);
+      const result = await res.json();
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId
+            ? { ...m, pending: { action: 'info', found: res.ok, employee: result.employee, requestedFields } }
+            : m
+        )
+      );
+    } catch {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === messageId ? { ...m, pending: { action: 'info', found: false } } : m))
+      );
+    }
+  };
+
+  // The "Yes, that's who I mean" / "No, someone else" response to a
+  // confirmIdentity suggestion. "Yes" converts straight into a normal
+  // update-confirmation card — same Confirm/Cancel flow as everywhere
+  // else, just with the identity question already settled.
+  const handleConfirmIdentity = (messageId: string, confirmed: boolean) => {
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== messageId || !m.pending || !m.pending.suggestedEmployee) return m;
+        if (confirmed) {
+          // suggestedEmployee only ever carries {id, fullName} — the
+          // deterministic lastEmployee memory never held email/nationalId,
+          // so there's nothing more to fill in here.
+          const emp = { ...m.pending.suggestedEmployee, email: null, nationalId: null };
+          return { ...m, pending: { action: 'update', matches: [emp], data: m.pending.data } };
+        }
+        return { ...m, pending: { action: 'askIdentity', data: m.pending.data } };
+      })
+    );
+  };
+
+  const handleConfirm = async (messageId: string, pending: ExtractResponse, employeeId?: number) => {
+    try {
+      const res = await authFetch('/api/chatbot/commit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: pending.action, employeeId, data: pending.data }),
+      });
+      const result = await res.json();
+
+      setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, pending: undefined } : m)));
+
+      if (!res.ok) {
+        appendMessage({ id: genId(), role: 'bot', text: `Couldn't save that: ${result.error}` });
+        return;
+      }
+      setLastEmployee({ id: result.employee.id, fullName: result.employee.fullName });
+      appendMessage({
+        id: genId(),
+        role: 'bot',
+        text: result.status === 'created'
+          ? `Created a new employee: ${result.employee.fullName}.`
+          : `Updated ${result.employee.fullName}'s record.`,
+      });
+    } catch {
+      appendMessage({ id: genId(), role: 'bot', text: 'Something went wrong saving that.' });
+    }
+  };
+
+  const handleCancel = (messageId: string) => {
+    setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, pending: undefined } : m)));
+    setPendingCreateDraft(null);
+    setPendingCreateField(null);
+    appendMessage({ id: genId(), role: 'bot', text: 'Cancelled — no changes were made.' });
+  };
+
+  const handleQuickAction = (prefill: string) => {
+    setInput(prefill);
+    textareaRef.current?.focus();
+  };
+
+  const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(e.target.value);
+    e.target.style.height = 'auto';
+    e.target.style.height = e.target.scrollHeight + 'px';
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  };
+
+  // ---- Shared input console — same component used in both welcome and chat views ----
+  const renderInputArea = () => (
+    <div className={showWelcome ? '' : 'bg-gradient-to-t from-white via-white to-transparent px-4 md:px-8 py-4 shrink-0'}>
+      <div className="max-w-2xl mx-auto">
+        <div
+          className="flex items-end bg-gray-100 border rounded-2xl p-1.5 shadow-sm focus-within:ring-4 transition-all"
+          style={{ borderColor: COLORS.border }}
+        >
+          <textarea
+            ref={textareaRef}
+            value={input}
+            onChange={handleTextareaChange}
+            onKeyDown={handleKeyDown}
+            placeholder={showWelcome ? 'Ask anything about employee records' : 'Type your message...'}
+            rows={1}
+            className="flex-1 bg-transparent text-gray-800 placeholder-gray-400 px-3 py-2.5 focus:outline-none text-[15px] resize-none max-h-32"
+          />
+          <button
+            onClick={handleSend}
+            disabled={!input.trim() || isLoading}
+            className="p-3 rounded-xl transition-all shrink-0 text-white"
+            style={{
+              backgroundColor: input.trim() && !isLoading ? COLORS.red : '#D1D5DB',
+              cursor: input.trim() && !isLoading ? 'pointer' : 'not-allowed',
+            }}
+            aria-label="Send message"
+          >
+            <FontAwesomeIcon icon={faPaperPlane} className="text-sm" />
+          </button>
+        </div>
+        {!showWelcome && (
+          <p className="text-xs text-gray-400 text-center mt-3">
+            Foundry Assistant can make mistakes. Please verify important information.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="h-screen flex flex-col bg-white relative overflow-hidden">
+      {/* Subtle background texture, matching their exact pattern */}
+      <div
+        className="absolute inset-0 opacity-[0.04] pointer-events-none"
+        style={{ backgroundImage: 'radial-gradient(#475569 1px, transparent 1px)', backgroundSize: '24px 24px' }}
+      />
+
+      {showWelcome ? (
+        <div className="flex-1 flex flex-col items-center justify-center px-4 md:px-8 pb-20 overflow-y-auto">
+          <div className="w-full max-w-2xl mx-auto">
+            <div className="text-center mb-10 animate-fade-in">
+              <div
+                className="w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg"
+                style={{ background: `linear-gradient(135deg, ${COLORS.redDark}, ${COLORS.red})` }}
+              >
+                <FontAwesomeIcon icon={faFire} className="text-white text-3xl" />
+              </div>
+              <h1 className="text-3xl md:text-4xl font-bold text-gray-900 mb-3">Foundry</h1>
+              <p className="text-gray-500 text-lg">
+                Create, update, and look up employee records — just by chatting
+              </p>
+              <div className="flex flex-wrap justify-center gap-3 mt-8">
+                {QUICK_ACTIONS.map((qa) => (
+                  <button
+                    key={qa.label}
+                    onClick={() => handleQuickAction(qa.prefill)}
+                    className="px-5 py-3 bg-gray-100 hover:bg-gray-200 rounded-xl text-sm text-gray-700 transition-all hover:shadow-md flex items-center gap-2"
+                  >
+                    <FontAwesomeIcon icon={qa.icon} style={{ color: COLORS.red }} />
+                    {qa.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="mt-10">{renderInputArea()}</div>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="flex-1 overflow-y-auto px-4 md:px-8 py-6 chat-scrollbar">
+            <div className="max-w-2xl mx-auto space-y-6">
+              {messages.map((m) => (
+                <div key={m.id} className="animate-fade-in">
+                  {m.role === 'bot' ? (
+                    <div className="flex gap-3">
+                      <div
+                        className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 shadow-md"
+                        style={{ background: `linear-gradient(135deg, ${COLORS.redDark}, ${COLORS.red})` }}
+                      >
+                        <FontAwesomeIcon icon={faRobot} className="text-white text-sm" />
+                      </div>
+                      <div className="flex-1 max-w-xl">
+                        {m.text && (
+                          <div className="bg-gray-100 rounded-2xl rounded-tl-md px-4 py-3 prose prose-sm max-w-none prose-p:my-1">
+                            <ReactMarkdown>{m.text}</ReactMarkdown>
+                          </div>
+                        )}
+                        {m.pending && (
+                          <ConfirmationCard
+                            pending={m.pending}
+                            onConfirm={(employeeId) => handleConfirm(m.id, m.pending!, employeeId)}
+                            onCancel={() => handleCancel(m.id)}
+                            onPickEmployee={(id) => handlePickEmployee(m.id, id)}
+                            onCreateAnyway={() => handleCreateAnyway(m.id)}
+                            onPickForInfo={(id) => handlePickForInfo(m.id, id)}
+                            onConfirmIdentity={(confirmed) => handleConfirmIdentity(m.id, confirmed)}
+                          />
+                        )}
+                        <span className="text-xs text-gray-400 mt-1 block">{m.timestamp}</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex gap-3 justify-end">
+                      <div className="flex-1 max-w-xl flex flex-col items-end">
+                        <div className="rounded-2xl rounded-tr-md px-4 py-3" style={{ backgroundColor: COLORS.red }}>
+                          <p className="text-white text-sm leading-relaxed whitespace-pre-wrap">{m.text}</p>
+                        </div>
+                        <span className="text-xs text-gray-400 mt-1">{m.timestamp}</span>
+                      </div>
+                      <Image
+                        src="/images/Wedy.ai_Logo.png"
+                        alt="User"
+                        width={36}
+                        height={36}
+                        className="w-9 h-9 rounded-xl flex-shrink-0 border-2"
+                        style={{ borderColor: COLORS.border }}
+                      />
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              {isLoading && (
+                <div className="flex gap-3 animate-fade-in">
+                  <div
+                    className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 shadow-md"
+                    style={{ background: `linear-gradient(135deg, ${COLORS.redDark}, ${COLORS.red})` }}
+                  >
+                    <FontAwesomeIcon icon={faRobot} className="text-white text-sm" />
+                  </div>
+                  <div className="flex-1 max-w-xl">
+                    <div className="bg-gray-100 rounded-2xl rounded-tl-md px-4 py-3">
+                      <div className="flex items-center gap-1.5 h-5">
+                        <span className="dot-bounce w-2 h-2 rounded-full bg-gray-400" style={{ animationDelay: '0s' }} />
+                        <span className="dot-bounce w-2 h-2 rounded-full bg-gray-400" style={{ animationDelay: '0.2s' }} />
+                        <span className="dot-bounce w-2 h-2 rounded-full bg-gray-400" style={{ animationDelay: '0.4s' }} />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div ref={messagesEndRef} />
+            </div>
+          </div>
+          {renderInputArea()}
+        </>
+      )}
+    </div>
+  );
+}

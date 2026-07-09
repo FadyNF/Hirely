@@ -12,15 +12,281 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
+/* @media (prefers-color-scheme: dark) {
   :root {
     --background: #0a0a0a;
     --foreground: #ededed;
   }
-}
+} */
 
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Login / Register screens (Foundry palette: #DC2626 / #B91C1C)       */
+/* Mirrors the same class names and animation patterns used across      */
+/* the company's real products, recolored to Foundry's chosen red.      */
+/* ------------------------------------------------------------------ */
+
+@keyframes login-fade-in-up {
+  from { opacity: 0; transform: translateY(24px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes login-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes login-slide-down {
+  from { opacity: 0; transform: translateY(-8px); max-height: 0; }
+  to { opacity: 1; transform: translateY(0); max-height: 60px; }
+}
+
+@keyframes login-spin {
+  to { transform: rotate(360deg); }
+}
+
+.animate-login-fade-in-up {
+  animation: login-fade-in-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  opacity: 0;
+}
+
+.login-delay-1 { animation-delay: 0.1s; }
+.login-delay-2 { animation-delay: 0.25s; }
+.login-delay-3 { animation-delay: 0.4s; }
+.login-delay-4 { animation-delay: 0.55s; }
+.login-delay-5 { animation-delay: 0.7s; }
+
+.login-input {
+  transition: all 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+  border: 1.5px solid #E5E7EB;
+}
+.login-input:focus {
+  border-color: #DC2626;
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.1), 0 1px 3px rgba(0, 0, 0, 0.06);
+  outline: none;
+}
+.login-input:hover:not(:focus) { border-color: #D1D5DB; }
+.login-input::placeholder { color: #9CA3AF; font-weight: 400; }
+
+.login-btn {
+  background: #DC2626;
+  transition: all 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+  position: relative;
+  overflow: hidden;
+}
+.login-btn:not(:disabled):hover {
+  background: #B91C1C;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(220, 38, 38, 0.3), 0 2px 4px rgba(220, 38, 38, 0.15);
+}
+.login-btn:not(:disabled):active {
+  transform: scale(0.97) translateY(0);
+  box-shadow: 0 1px 4px rgba(220, 38, 38, 0.2);
+}
+.login-btn:not(:disabled):focus-visible {
+  outline: 2px solid #B91C1C;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.15);
+}
+.login-btn:disabled {
+  background: #D1D5DB;
+  cursor: not-allowed;
+  color: #9CA3AF;
+}
+.login-btn::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.15), transparent);
+  background-size: 200% 100%;
+}
+.login-btn:not(:disabled):hover::after {
+  animation: login-shimmer 1.5s ease-in-out;
+}
+
+.login-underline-accent {
+  height: 3px;
+  background: linear-gradient(90deg, #B91C1C, #DC2626, #EF9A9A);
+  border-radius: 2px;
+}
+
+.login-error-alert {
+  animation: login-slide-down 0.35s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.login-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2.5px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: login-spin 0.65s linear infinite;
+}
+
+.bg-grid {
+  background-image: radial-gradient(circle at 1px 1px, rgba(220, 38, 38, 0.03) 1px, transparent 0);
+  background-size: 32px 32px;
+}
+
+.login-card-container {
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.03);
+}
+
+.login-security-badge {
+  transition: all 0.2s ease;
+}
+.login-security-badge:hover {
+  color: #DC2626;
+}
+
+/* ------------------------------------------------------------------ */
+/* Login / Register screens (Foundry palette: #DC2626 / #B91C1C)       */
+/* Mirrors the same class names and animation patterns used across      */
+/* the company's real products, recolored to Foundry's chosen red.      */
+/* ------------------------------------------------------------------ */
+
+@keyframes login-fade-in-up {
+  from { opacity: 0; transform: translateY(24px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes login-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes login-slide-down {
+  from { opacity: 0; transform: translateY(-8px); max-height: 0; }
+  to { opacity: 1; transform: translateY(0); max-height: 60px; }
+}
+
+@keyframes login-spin {
+  to { transform: rotate(360deg); }
+}
+
+.animate-login-fade-in-up {
+  animation: login-fade-in-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  opacity: 0;
+}
+
+.login-delay-1 { animation-delay: 0.1s; }
+.login-delay-2 { animation-delay: 0.25s; }
+.login-delay-3 { animation-delay: 0.4s; }
+.login-delay-4 { animation-delay: 0.55s; }
+.login-delay-5 { animation-delay: 0.7s; }
+
+.login-input {
+  transition: all 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+  border: 1.5px solid #E5E7EB;
+}
+.login-input:focus {
+  border-color: #DC2626;
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.1), 0 1px 3px rgba(0, 0, 0, 0.06);
+  outline: none;
+}
+.login-input:hover:not(:focus) { border-color: #D1D5DB; }
+.login-input::placeholder { color: #9CA3AF; font-weight: 400; }
+
+.login-btn {
+  background: #DC2626;
+  transition: all 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+  position: relative;
+  overflow: hidden;
+}
+.login-btn:not(:disabled):hover {
+  background: #B91C1C;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(220, 38, 38, 0.3), 0 2px 4px rgba(220, 38, 38, 0.15);
+}
+.login-btn:not(:disabled):active {
+  transform: scale(0.97) translateY(0);
+  box-shadow: 0 1px 4px rgba(220, 38, 38, 0.2);
+}
+.login-btn:not(:disabled):focus-visible {
+  outline: 2px solid #B91C1C;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.15);
+}
+.login-btn:disabled {
+  background: #D1D5DB;
+  cursor: not-allowed;
+  color: #9CA3AF;
+}
+.login-btn::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.15), transparent);
+  background-size: 200% 100%;
+}
+.login-btn:not(:disabled):hover::after {
+  animation: login-shimmer 1.5s ease-in-out;
+}
+
+.login-underline-accent {
+  height: 3px;
+  background: linear-gradient(90deg, #B91C1C, #DC2626, #EF9A9A);
+  border-radius: 2px;
+}
+
+.login-error-alert {
+  animation: login-slide-down 0.35s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.login-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2.5px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: login-spin 0.65s linear infinite;
+}
+
+.bg-grid {
+  background-image: radial-gradient(circle at 1px 1px, rgba(220, 38, 38, 0.03) 1px, transparent 0);
+  background-size: 32px 32px;
+}
+
+.login-card-container {
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.03);
+}
+
+.login-security-badge {
+  transition: all 0.2s ease;
+}
+.login-security-badge:hover {
+  color: #DC2626;
+}
+
+/* ------------------------------------------------------------------ */
+/* Chat interface animations                                           */
+/* ------------------------------------------------------------------ */
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in {
+  animation: fade-in 0.4s ease-out forwards;
+  opacity: 0;
+}
+
+@keyframes dot-bounce {
+  0%, 60%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-5px); }
+}
+.dot-bounce {
+  animation: dot-bounce 1.4s infinite ease-in-out;
+}
+
+.chat-scrollbar::-webkit-scrollbar { width: 6px; }
+.chat-scrollbar::-webkit-scrollbar-thumb {
+  background-color: #e5e7eb;
+  border-radius: 9999px;
 }
