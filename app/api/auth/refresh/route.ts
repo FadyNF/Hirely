@@ -4,12 +4,17 @@ import { NextRequest, NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { prisma } from "@/lib/prisma";
+import { signTokenPair, setAuthCookies } from "@/lib/authTokens";
+import { REFRESH_TOKEN_COOKIE } from "@/lib/requireAuth";
 
 const JWT_SECRET = process.env.JWT_SECRET!;
 
 export async function POST(request: NextRequest) {
   try {
-    const { refresh_token } = await request.json();
+    // The refresh token now lives in its own httpOnly cookie (scoped to
+    // /api/auth) instead of a request body the client had to remember to
+    // send — the browser attaches it automatically.
+    const refresh_token = request.cookies.get(REFRESH_TOKEN_COOKIE)?.value;
 
     if (!refresh_token) {
       return NextResponse.json(
@@ -60,20 +65,8 @@ export async function POST(request: NextRequest) {
     }
 
     // ---- Step 3: issue a NEW pair (rotation) ----
-    const newAccessToken = jwt.sign(
-      { userId: user.id, email: user.email },
-      JWT_SECRET,
-      { expiresIn: "15m" }
-    );
-    const newRefreshToken = jwt.sign(
-      { userId: user.id },
-      JWT_SECRET,
-      { expiresIn: "7d" }
-    );
-    const newRefreshTokenHash = crypto
-      .createHash("sha256")
-      .update(newRefreshToken)
-      .digest("hex");
+    const { accessToken: newAccessToken, refreshToken: newRefreshToken, refreshTokenHash: newRefreshTokenHash } =
+      signTokenPair(user.id, user.email);
 
     // Overwrite the stored hash — this is the actual "rotation" step.
     // The old refresh token's hash no longer matches anything on file,
@@ -83,10 +76,9 @@ export async function POST(request: NextRequest) {
       data: { refreshTokenHash: newRefreshTokenHash },
     });
 
-    return NextResponse.json({
-      access_token: newAccessToken,
-      refresh_token: newRefreshToken,
-    });
+    const response = NextResponse.json({ ok: true });
+    setAuthCookies(response, newAccessToken, newRefreshToken);
+    return response;
   } catch (error) {
     console.error("Refresh error:", error);
     return NextResponse.json(

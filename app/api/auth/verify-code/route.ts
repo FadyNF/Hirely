@@ -1,11 +1,8 @@
 // app/api/auth/verify-code/route.ts
 
 import { NextRequest, NextResponse } from "next/server";
-import jwt from "jsonwebtoken";
-import crypto from "crypto";
 import { prisma } from "@/lib/prisma";
-
-const JWT_SECRET = process.env.JWT_SECRET!;
+import { signTokenPair, setAuthCookies } from "@/lib/authTokens";
 
 export async function POST(request: NextRequest) {
   try {
@@ -49,21 +46,6 @@ export async function POST(request: NextRequest) {
     }
 
     // ---- Build the two tokens ----
-    // Access token: short-lived wristband, used on every request.
-    const accessToken = jwt.sign(
-      { userId: user.id, email: user.email },
-      JWT_SECRET,
-      { expiresIn: "15m" }
-    );
-
-    // Refresh token: long-lived renewal ticket, used only to get new
-    // access tokens without logging in again.
-    const refreshToken = jwt.sign(
-      { userId: user.id },
-      JWT_SECRET,
-      { expiresIn: "7d" }
-    );
-
     // We store a HASH of the refresh token, not the token itself — same
     // reason we hash passwords: if the database ever leaked, the raw
     // tokens shouldn't be sitting there in plain text.
@@ -74,10 +56,7 @@ export async function POST(request: NextRequest) {
     // token is already a long random string nobody could guess — the
     // hash here just protects against a raw database leak, so a fast
     // hash is the right tool, not overkill removed for no reason.
-    const refreshTokenHash = crypto
-      .createHash("sha256")
-      .update(refreshToken)
-      .digest("hex");
+    const { accessToken, refreshToken, refreshTokenHash } = signTokenPair(user.id, user.email);
 
     // ---- Update the user: verified, code cleared, refresh token stored ----
     await prisma.user.update({
@@ -90,11 +69,11 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    return NextResponse.json({
-      access_token: accessToken,
-      refresh_token: refreshToken,
+    const response = NextResponse.json({
       user: { id: user.id, email: user.email },
     });
+    setAuthCookies(response, accessToken, refreshToken);
+    return response;
   } catch (error) {
     console.error("Verify-code error:", error);
     return NextResponse.json(

@@ -2,11 +2,9 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
-import crypto from "crypto";
 import { prisma } from "@/lib/prisma";
-
-const JWT_SECRET = process.env.JWT_SECRET!;
+import { signTokenPair, setAuthCookies } from "@/lib/authTokens";
+import { sendVerificationEmail } from "@/lib/mailer";
 
 export async function POST(request: NextRequest) {
   try {
@@ -59,9 +57,10 @@ export async function POST(request: NextRequest) {
         data: { verificationCode, codeExpiresAt },
       });
 
-      // Note: in the real build we'd also re-send the email here via Resend.
-      // Skipping that for now since we're focused on proving the login
-      // logic itself first — easy to bolt on afterward.
+      // Same email the register/resend-code routes send — the DB now
+      // holds a fresh code, so the user needs it actually delivered,
+      // not just generated.
+      await sendVerificationEmail(user.email, verificationCode);
 
       return NextResponse.json({
         status: "verification_required",
@@ -71,31 +70,18 @@ export async function POST(request: NextRequest) {
     }
 
     // ---- All checks passed — issue tokens, same as verify-code did ----
-    const accessToken = jwt.sign(
-      { userId: user.id, email: user.email },
-      JWT_SECRET,
-      { expiresIn: "15m" }
-    );
-    const refreshToken = jwt.sign(
-      { userId: user.id },
-      JWT_SECRET,
-      { expiresIn: "7d" }
-    );
-    const refreshTokenHash = crypto
-      .createHash("sha256")
-      .update(refreshToken)
-      .digest("hex");
+    const { accessToken, refreshToken, refreshTokenHash } = signTokenPair(user.id, user.email);
 
     await prisma.user.update({
       where: { id: user.id },
       data: { refreshTokenHash },
     });
 
-    return NextResponse.json({
-      access_token: accessToken,
-      refresh_token: refreshToken,
+    const response = NextResponse.json({
       user: { id: user.id, email: user.email },
     });
+    setAuthCookies(response, accessToken, refreshToken);
+    return response;
   } catch (error) {
     console.error("Login error:", error);
     return NextResponse.json(

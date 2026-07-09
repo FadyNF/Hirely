@@ -55,18 +55,27 @@ export async function POST(request: NextRequest) {
     const verificationCode = generateOtpCode();
     const codeExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes from now
 
-    // ---- Create the user in the database ----
-    const user = await prisma.user.create({
-      data: {
-        email,
-        passwordHash,
-        verificationCode,
-        codeExpiresAt,
-      },
-    });
-
-    // ---- Send the email with the code via Gmail SMTP ----
-    await sendVerificationEmail(email, verificationCode);
+    // ---- Create the user AND send the email as one unit ----
+    // If sendVerificationEmail throws (bad SMTP creds, network blip,
+    // Gmail rate limit), Prisma rolls back tx.user.create automatically —
+    // otherwise a failed send would leave a permanent, half-created user
+    // row behind, and every future registration attempt with this same
+    // email would hit the "already exists" check below with no way to
+    // actually finish signing up. The timeout is bumped above the
+    // mailer's own 10s connection timeout (lib/mailer.ts) so a slow-but-
+    // successful send isn't cut off by the transaction wrapper itself.
+    const user = await prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({
+        data: {
+          email,
+          passwordHash,
+          verificationCode,
+          codeExpiresAt,
+        },
+      });
+      await sendVerificationEmail(email, verificationCode);
+      return created;
+    }, { timeout: 15000 });
 
     // ---- Respond, matching their real API's response shape ----
     return NextResponse.json({

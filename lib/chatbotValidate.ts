@@ -67,6 +67,16 @@ function tryParseWrittenDate(v: string): string | null {
   return `${y}-${m}-${d}`;
 }
 
+// Shared by birthDate and every date-shaped field inside experience/
+// education/certificates — one real-date check, reused everywhere a date
+// is expected instead of copy-pasted per field.
+function validateDateString(value: string): FieldValidation {
+  if (isRealCalendarDate(value)) return { valid: true };
+  const written = tryParseWrittenDate(value);
+  if (written) return { valid: true, normalized: written };
+  return { valid: false };
+}
+
 // Fields with a fixed, small set of valid answers — matched
 // case-insensitively, but stored in this exact canonical casing.
 const ENUM_OPTIONS: Record<string, string[]> = {
@@ -142,13 +152,14 @@ export function validateFieldValue(field: string, rawValue: string): FieldValida
     }
 
     case "birthDate": {
-      if (isRealCalendarDate(value)) return { valid: true };
-      const written = tryParseWrittenDate(value);
-      if (written) return { valid: true, normalized: written };
-      return {
-        valid: false,
-        reason: "Must be a real date — either YYYY-MM-DD or written out, e.g. \"June 7, 2000\".",
-      };
+      const result = validateDateString(value);
+      if (!result.valid) {
+        return {
+          valid: false,
+          reason: "Must be a real date — either YYYY-MM-DD or written out, e.g. \"June 7, 2000\".",
+        };
+      }
+      return result;
     }
 
     case "workLocation":
@@ -163,16 +174,195 @@ export function validateFieldValue(field: string, rawValue: string): FieldValida
   }
 }
 
+// ---------------------------------------------------------------------------
+// Relation-array validation (experience / education / certificates / skills)
+// ---------------------------------------------------------------------------
+//
+// Unlike the top-level Employee fields above (every one of them an optional
+// database column), nearly every field on these four child tables is a
+// REQUIRED, non-nullable column (see prisma/schema.prisma) — jobTitle,
+// company, startDate, endDate; degree, fieldOfStudy, institution,
+// graduationYear; certName, issuer, issueDate; category, name, proficiency.
+// An invalid value in one of those can't just be dropped the way a scalar
+// warning drops one field — Prisma would either reject the write outright
+// (a NOT NULL column missing entirely) or store a meaningless row (a skill
+// with no category). So an invalid REQUIRED field drops the WHOLE entry,
+// reported as one warning. Only the two genuinely optional columns
+// (Education.gpa, Certificate.expiryDate) get single-field dropping, the
+// same as scalar fields do above.
+
+function isNonEmptyText(v: unknown): v is string {
+  return typeof v === "string" && v.trim().length > 0;
+}
+
+function isValidDate(v: unknown): boolean {
+  return typeof v === "string" && validateDateString(v).valid;
+}
+
+// endDate is the one date-shaped field that ALSO accepts a non-date
+// sentinel meaning "still ongoing" — normalized to a fixed casing ("current"
+// typed in becomes "Current" stored), same idea as the gender/marital-status
+// enum normalization above.
+function validateEndDate(v: unknown): FieldValidation {
+  if (typeof v !== "string") return { valid: false };
+  if (v.trim().toLowerCase() === "current") return { valid: true, normalized: "Current" };
+  return validateDateString(v);
+}
+
+const CURRENT_YEAR = new Date().getFullYear();
+function isPlausibleGraduationYear(v: unknown): boolean {
+  return typeof v === "number" && Number.isInteger(v) && v >= 1950 && v <= CURRENT_YEAR + 1;
+}
+
+// The union of every accepted GPA scale (0-4.0, 0.7-4.0 German, 0-100
+// percentage) collapses to this one range, since the first two both sit
+// entirely inside the third.
+function isValidGpa(v: unknown): boolean {
+  return typeof v === "number" && v >= 0 && v <= 100;
+}
+const GPA_HINT = "Must be a GPA on one of: 0-4.0 (standard scale), 0.7-4.0 (German scale), or 0-100 (percentage grade).";
+
+function isValidProficiency(v: unknown): boolean {
+  return typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 100;
+}
+
+interface RelationCheck {
+  cleaned: Record<string, unknown>[];
+  warnings: string[];
+}
+
+function validateExperienceEntries(entries: unknown): RelationCheck {
+  const cleaned: Record<string, unknown>[] = [];
+  const warnings: string[] = [];
+  if (!Array.isArray(entries)) return { cleaned, warnings };
+
+  entries.forEach((raw, i) => {
+    const e = raw as Record<string, unknown>;
+    const label = `Experience entry ${i + 1}`;
+    if (!isNonEmptyText(e.jobTitle)) return warnings.push(`${label} was left out — missing a job title.`);
+    if (!isNonEmptyText(e.company)) return warnings.push(`${label} was left out — missing a company.`);
+    if (!isValidDate(e.startDate)) return warnings.push(`${label} was left out — "${e.startDate}" isn't a real start date.`);
+    const end = validateEndDate(e.endDate);
+    if (!end.valid) return warnings.push(`${label} was left out — "${e.endDate}" isn't a real end date (or "Current").`);
+
+    cleaned.push({
+      jobTitle: e.jobTitle,
+      company: e.company,
+      startDate: e.startDate,
+      endDate: end.normalized ?? e.endDate,
+      // description is the one optional column here — kept only if it's
+      // actually a non-empty string, dropped silently otherwise (no
+      // warning, since leaving it out entirely is a valid choice).
+      ...(isNonEmptyText(e.description) ? { description: e.description } : {}),
+    });
+  });
+
+  return { cleaned, warnings };
+}
+
+function validateEducationEntries(entries: unknown): RelationCheck {
+  const cleaned: Record<string, unknown>[] = [];
+  const warnings: string[] = [];
+  if (!Array.isArray(entries)) return { cleaned, warnings };
+
+  entries.forEach((raw, i) => {
+    const e = raw as Record<string, unknown>;
+    const label = `Education entry ${i + 1}`;
+    if (!isNonEmptyText(e.degree)) return warnings.push(`${label} was left out — missing a degree.`);
+    if (!isNonEmptyText(e.fieldOfStudy)) return warnings.push(`${label} was left out — missing a field of study.`);
+    if (!isNonEmptyText(e.institution)) return warnings.push(`${label} was left out — missing an institution.`);
+    if (!isPlausibleGraduationYear(e.graduationYear)) {
+      return warnings.push(`${label} was left out — "${e.graduationYear}" isn't a plausible graduation year.`);
+    }
+
+    const entry: Record<string, unknown> = {
+      degree: e.degree,
+      fieldOfStudy: e.fieldOfStudy,
+      institution: e.institution,
+      graduationYear: e.graduationYear,
+    };
+    if (e.gpa !== undefined && e.gpa !== null) {
+      if (isValidGpa(e.gpa)) {
+        entry.gpa = e.gpa;
+      } else {
+        warnings.push(`"${e.gpa}" for ${label}'s GPA was left out — ${GPA_HINT}`);
+      }
+    }
+    cleaned.push(entry);
+  });
+
+  return { cleaned, warnings };
+}
+
+function validateCertificateEntries(entries: unknown): RelationCheck {
+  const cleaned: Record<string, unknown>[] = [];
+  const warnings: string[] = [];
+  if (!Array.isArray(entries)) return { cleaned, warnings };
+
+  entries.forEach((raw, i) => {
+    const e = raw as Record<string, unknown>;
+    const label = `Certificate entry ${i + 1}`;
+    if (!isNonEmptyText(e.certName)) return warnings.push(`${label} was left out — missing a certificate name.`);
+    if (!isNonEmptyText(e.issuer)) return warnings.push(`${label} was left out — missing an issuing organization.`);
+    if (!isValidDate(e.issueDate)) return warnings.push(`${label} was left out — "${e.issueDate}" isn't a real issue date.`);
+
+    const entry: Record<string, unknown> = {
+      certName: e.certName,
+      issuer: e.issuer,
+      issueDate: e.issueDate,
+    };
+    if (e.expiryDate !== undefined && e.expiryDate !== null) {
+      if (isValidDate(e.expiryDate)) {
+        entry.expiryDate = e.expiryDate;
+      } else {
+        warnings.push(`"${e.expiryDate}" for ${label}'s expiry date was left out — isn't a real date.`);
+      }
+    }
+    cleaned.push(entry);
+  });
+
+  return { cleaned, warnings };
+}
+
+function validateSkillEntries(entries: unknown): RelationCheck {
+  const cleaned: Record<string, unknown>[] = [];
+  const warnings: string[] = [];
+  if (!Array.isArray(entries)) return { cleaned, warnings };
+
+  entries.forEach((raw, i) => {
+    const e = raw as Record<string, unknown>;
+    const label = `Skill entry ${i + 1}`;
+    const category = typeof e.category === "string" ? e.category.toLowerCase() : "";
+    if (category !== "technical" && category !== "language") {
+      return warnings.push(`${label} was left out — category must be "technical" or "language".`);
+    }
+    if (!isNonEmptyText(e.name)) return warnings.push(`${label} was left out — missing a skill name.`);
+    if (!isValidProficiency(e.proficiency)) {
+      return warnings.push(`${label} was left out — proficiency must be a number from 0-100.`);
+    }
+
+    cleaned.push({ category, name: e.name, proficiency: e.proficiency });
+  });
+
+  return { cleaned, warnings };
+}
+
+const RELATION_VALIDATORS: Record<string, (entries: unknown) => RelationCheck> = {
+  experience: validateExperienceEntries,
+  education: validateEducationEntries,
+  certificates: validateCertificateEntries,
+  skills: validateSkillEntries,
+};
+
 // Used for bulk messages (updates, full freeform pastes) — validates
 // every field actually present, dropping anything that fails its own
 // shape check and explaining why, rather than writing bad data.
 export function validateExtractedFields(data: Record<string, unknown>) {
   const cleaned: Record<string, unknown> = { ...data };
   const warnings: string[] = [];
-  const relationFields = ["experience", "education", "certificates", "skills"];
 
   for (const [field, rawValue] of Object.entries(data)) {
-    if (relationFields.includes(field)) continue;
+    if (field in RELATION_VALIDATORS) continue;
     if (typeof rawValue !== "string" || rawValue.length === 0) continue;
 
     const result = validateFieldValue(field, rawValue);
@@ -182,6 +372,13 @@ export function validateExtractedFields(data: Record<string, unknown>) {
     } else if (result.normalized) {
       cleaned[field] = result.normalized;
     }
+  }
+
+  for (const [field, validate] of Object.entries(RELATION_VALIDATORS)) {
+    if (!(field in data)) continue;
+    const { cleaned: cleanedEntries, warnings: relationWarnings } = validate(data[field]);
+    cleaned[field] = cleanedEntries;
+    warnings.push(...relationWarnings);
   }
 
   return { cleaned, warnings };

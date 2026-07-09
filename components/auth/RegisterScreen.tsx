@@ -27,7 +27,7 @@ interface RegisterScreenProps {
 }
 
 export default function RegisterScreen({ onSwitchToLogin }: RegisterScreenProps) {
-  const { register, pendingVerification, verifyCode, resendCode } = useAuth();
+  const { register, pendingVerification, verifyCode, resendCode, clearPendingVerification } = useAuth();
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -138,6 +138,20 @@ export default function RegisterScreen({ onSwitchToLogin }: RegisterScreenProps)
     }
   };
 
+  // Backs out of the OTP step entirely, back to a blank email/password
+  // form — clearing pendingVerification (not just reloading the page,
+  // which never actually left this step since that state is persisted
+  // to sessionStorage) and resetting the form's own local state too.
+  const handleUseAnotherEmail = () => {
+    clearPendingVerification();
+    setEmail('');
+    setPassword('');
+    setErrors({});
+    setCode('');
+    setVerifyError('');
+    setResendCooldown(0);
+  };
+
   if (!mounted) return null;
 
   // ---- Step 2: OTP verification ----
@@ -218,7 +232,7 @@ export default function RegisterScreen({ onSwitchToLogin }: RegisterScreenProps)
             </form>
 
             <div className="mt-5 pt-5 text-center" style={{ borderTop: '1px solid #E5E7EB' }}>
-              <button type="button" onClick={() => window.location.reload()}
+              <button type="button" onClick={handleUseAnotherEmail}
                 className="text-xs text-gray-500 hover:text-gray-800 transition-colors">
                 ← Use a different email
               </button>
