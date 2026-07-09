@@ -6,6 +6,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { Prisma } from "@/lib/generated/prisma/client";
 import { requireUserId } from "@/lib/requireAuth";
 import { validateExtractedFields } from "@/lib/chatbotValidate";
 
@@ -83,6 +84,25 @@ export async function POST(request: NextRequest) {
     });
     return NextResponse.json({ status: "updated", employee });
   } catch (error) {
+    // P2002 = unique-constraint violation. nationalId is the only unique
+    // field on Employee, so any P2002 here is a duplicate national ID —
+    // return an actionable 409 instead of a generic 500 so the admin knows
+    // to fix the ID rather than assuming the app broke. (The DB constraint
+    // is the real guard; this just translates its error into plain words.)
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      return NextResponse.json(
+        { error: "An employee with that national ID already exists." },
+        { status: 409 }
+      );
+    }
+    // P2025 = record to update not found (e.g. the employee was deleted
+    // between disambiguation and confirm).
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
+      return NextResponse.json(
+        { error: "That employee no longer exists." },
+        { status: 404 }
+      );
+    }
     console.error("Chatbot commit error:", error);
     return NextResponse.json(
       { error: "Something went wrong saving that." },

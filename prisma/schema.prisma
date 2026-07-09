@@ -42,7 +42,11 @@ model Employee {
   email           String?
   workLocation    String?
   gender          String?
-  nationalId      String?
+  // Unique so no two employees can share a national ID. Nullable-unique:
+  // SQLite allows many NULLs in a unique column, so employees genuinely
+  // without an ID on file still coexist — only real, populated values
+  // must be distinct.
+  nationalId      String?  @unique
   militaryStatus  String?
   createdAt       DateTime @default(now())
 
