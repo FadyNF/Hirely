@@ -20,6 +20,7 @@ import {
 } from '@fortawesome/free-solid-svg-icons';
 import { BASIC_INFO_FIELDS, BASIC_INFO_LABELS } from '@/lib/tabConfig';
 import { useAuth } from '@/context/AuthContext';
+import EmployeeForm, { type BuiltEmployeeData, type SubmitResult } from './EmployeeForm';
 
 const RELATION_LABELS: Record<string, string> = {
   experience: 'Experience', education: 'Education',
@@ -44,7 +45,7 @@ interface EmployeeMatch {
 }
 
 interface ExtractResponse {
-  action: 'create' | 'update' | 'disambiguate' | 'unsupported' | 'needsInfo' | 'invalidField' | 'info' | 'disambiguateRead' | 'confirmIdentity' | 'askIdentity';
+  action: 'create' | 'update' | 'disambiguate' | 'unsupported' | 'needsInfo' | 'invalidField' | 'info' | 'disambiguateRead' | 'confirmIdentity' | 'askIdentity' | 'createForm';
   matches?: EmployeeMatch[];
   data?: Record<string, unknown>;
   field?: string;
@@ -64,7 +65,7 @@ const FIELD_QUESTIONS: Record<string, string> = {
   nationality: "What's their nationality?",
   maritalStatus: "What's their marital status? (Single, Married, Divorced, or Widowed)",
   email: "What's their email address?",
-  workLocation: "Where do they work?",
+  workLocation: "Which department are they in?",
   gender: "What's their gender? (Male or Female)",
   nationalId: "What's their National ID? (exactly 14 digits)",
   militaryStatus: "What's their military status? (Exempted, Completed, Postponed, or Not Applicable)",
@@ -243,7 +244,7 @@ function RelationDetail({ relationKey, employee }: { relationKey: string; employ
 // ---- ConfirmationCard: UNCHANGED logic from before, every action variant ----
 
 function ConfirmationCard({
-  pending, onConfirm, onCancel, onPickEmployee, onCreateAnyway, onPickForInfo, onConfirmIdentity,
+  pending, onConfirm, onCancel, onPickEmployee, onCreateAnyway, onPickForInfo, onConfirmIdentity, onOpenForm,
 }: {
   pending: ExtractResponse;
   onConfirm: (employeeId?: number) => void;
@@ -252,7 +253,32 @@ function ConfirmationCard({
   onCreateAnyway: () => void;
   onPickForInfo: (id: number) => void;
   onConfirmIdentity: (confirmed: boolean) => void;
+  onOpenForm: () => void;
 }) {
+  // A create — offer the structured form rather than the old one-by-one
+  // question flow. The form opens pre-filled with whatever was extracted.
+  if (pending.action === 'createForm') {
+    return (
+      <div className="rounded-xl border bg-white p-4" style={{ borderColor: COLORS.border }}>
+        <div className="flex items-center gap-2 mb-2">
+          <FontAwesomeIcon icon={faUserPlus} style={{ color: COLORS.red }} />
+          <p className="text-sm font-medium" style={{ color: COLORS.black }}>Let&apos;s add a new employee</p>
+        </div>
+        <p className="text-xs mb-3" style={{ color: COLORS.gray }}>
+          Fill in the details in the form — I&apos;ve pre-filled anything I picked up from your message.
+        </p>
+        <button
+          onClick={onOpenForm}
+          className="flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg text-white transition-opacity hover:opacity-90"
+          style={{ backgroundColor: COLORS.red }}
+        >
+          <FontAwesomeIcon icon={faUserPlus} className="text-xs" />
+          Open the form
+        </button>
+      </div>
+    );
+  }
+
   if (pending.action === 'unsupported') {
     return (
       <div className="rounded-lg border p-4 text-sm" style={{ borderColor: COLORS.border, color: COLORS.gray }}>
@@ -509,6 +535,9 @@ export default function ChatbotView() {
   // since our own code did the resolving. Used as a fallback suggestion
   // when a follow-up reference (like "his") can't otherwise be resolved.
   const [lastEmployee, setLastEmployee] = useState<{ id: number; fullName: string } | null>(null);
+  // The structured create form, when open — holds the pre-fill data the
+  // extract step pulled out of the admin's opening message.
+  const [formInitialData, setFormInitialData] = useState<Record<string, unknown> | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -537,6 +566,7 @@ export default function ChatbotView() {
       case 'disambiguate':
       case 'disambiguateRead': return 'Found multiple employees with that name and asked which one was meant.';
       case 'create': return 'Proposed creating a new employee record, awaiting confirmation.';
+      case 'createForm': return 'Opened the new-employee form for the admin to fill in.';
       case 'update': return 'Proposed updating an employee record, awaiting confirmation.';
       default: return 'Responded with a structured prompt.';
     }
@@ -698,6 +728,31 @@ export default function ChatbotView() {
     }
   };
 
+  // Submit from the structured create form. Posts straight to the commit
+  // route (no Gemini — the fields are already structured). A duplicate
+  // national ID (409) maps back onto that field so the form can flag it
+  // inline; any other error surfaces as a banner. On success we close the
+  // form, remember the new employee, and drop a confirmation into the chat.
+  const handleFormSubmit = async (data: BuiltEmployeeData): Promise<SubmitResult> => {
+    const res = await authFetch('/api/chatbot/commit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'create', data }),
+    });
+    const result = await res.json();
+
+    if (res.ok) {
+      setFormInitialData(null);
+      setLastEmployee({ id: result.employee.id, fullName: result.employee.fullName });
+      appendMessage({ id: genId(), role: 'bot', text: `Created a new employee: ${result.employee.fullName}.` });
+      return { ok: true };
+    }
+    if (res.status === 409) {
+      return { ok: false, fieldError: { field: 'nationalId', message: result.error || 'That national ID already exists.' } };
+    }
+    return { ok: false, error: result.error || 'Something went wrong saving that.' };
+  };
+
   const handleCancel = (messageId: string) => {
     setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, pending: undefined } : m)));
     setPendingCreateDraft(null);
@@ -829,6 +884,7 @@ export default function ChatbotView() {
                             onCreateAnyway={() => handleCreateAnyway(m.id)}
                             onPickForInfo={(id) => handlePickForInfo(m.id, id)}
                             onConfirmIdentity={(confirmed) => handleConfirmIdentity(m.id, confirmed)}
+                            onOpenForm={() => setFormInitialData(m.pending!.data ?? {})}
                           />
                         )}
                         <span className="text-xs text-gray-400 mt-1 block">{m.timestamp}</span>
@@ -880,6 +936,14 @@ export default function ChatbotView() {
           </div>
           {renderInputArea()}
         </>
+      )}
+
+      {formInitialData !== null && (
+        <EmployeeForm
+          initialData={formInitialData}
+          onSubmit={handleFormSubmit}
+          onClose={() => setFormInitialData(null)}
+        />
       )}
     </div>
   );

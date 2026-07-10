@@ -79,10 +79,20 @@ function validateDateString(value: string): FieldValidation {
 
 // Fields with a fixed, small set of valid answers — matched
 // case-insensitively, but stored in this exact canonical casing.
-const ENUM_OPTIONS: Record<string, string[]> = {
+// Exported so the form can render these as dropdowns (one source of truth
+// for the valid options, instead of the form hardcoding its own list).
+export const ENUM_OPTIONS: Record<string, string[]> = {
   gender: ["Male", "Female"],
   maritalStatus: ["Single", "Married", "Divorced", "Widowed"],
   militaryStatus: ["Exempted", "Completed", "Postponed", "Not Applicable"],
+  // "Other" is deliberately kept as an escape hatch — without it, a real
+  // employee whose nationality isn't on this list couldn't be saved at all.
+  nationality: [
+    "Egyptian", "Sudanese", "Jordanian", "Saudi", "Emirati", "Lebanese",
+    "Syrian", "Palestinian", "Iraqi", "Libyan", "Algerian", "Moroccan",
+    "Tunisian", "Turkish", "Indian", "Pakistani", "Filipino", "British",
+    "American", "Other",
+  ],
 };
 
 export function validateFieldValue(field: string, rawValue: string): FieldValidation {
@@ -105,6 +115,14 @@ export function validateFieldValue(field: string, rawValue: string): FieldValida
       if (value.length < 3 || !/\s/.test(value)) {
         return { valid: false, reason: "Should include a first and last name (at least 3 characters)." };
       }
+      // Letters only (any script — \p{L} covers Arabic, accented Latin,
+      // etc. — plus combining marks \p{M} for Arabic diacritics), spaces,
+      // hyphens, and apostrophes. Catches "Fady Nabil 88" or "<script>
+      // alert" while still allowing "O'Brien Smith", "Anne-Marie Fouad",
+      // and "محمد أحمد".
+      if (!/^[\p{L}\p{M}\s'-]+$/u.test(value)) {
+        return { valid: false, reason: "Should only contain letters — no numbers or symbols." };
+      }
       return { valid: true };
 
     case "phone":
@@ -116,8 +134,12 @@ export function validateFieldValue(field: string, rawValue: string): FieldValida
       return { valid: true };
 
     case "email":
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
-        return { valid: false, reason: "Must be a valid email address, e.g. name@company.com." };
+      // Company email only — exact-case "@elsewedy.com", no subdomains.
+      // (Deliberately case-SENSITIVE per the current requirement, even
+      // though real email domains are case-insensitive — revisit if that
+      // ever causes real false rejections.)
+      if (!/^[^\s@]+@elsewedy\.com$/.test(value)) {
+        return { valid: false, reason: "Must be a company email ending in @elsewedy.com (exact case, no subdomain)." };
       }
       return { valid: true };
 
@@ -159,11 +181,22 @@ export function validateFieldValue(field: string, rawValue: string): FieldValida
           reason: "Must be a real date — either YYYY-MM-DD or written out, e.g. \"June 7, 2000\".",
         };
       }
+      // validateDateString only checks the date is real (correct month/day
+      // combination) — it never checked the YEAR was plausible at all, so
+      // "5006-12-01" or "9999-01-01" passed as "valid" dates. No lower
+      // bound for now (unbounded how far back is fine) — but a birth date
+      // can't be later than today, full stop.
+      const iso = result.normalized ?? value;
+      if (new Date(`${iso}T00:00:00Z`).getTime() > Date.now()) {
+        return { valid: false, reason: "Birth date can't be in the future." };
+      }
       return result;
     }
 
     case "workLocation":
-    case "nationality":
+      // Relabeled "Department" in the UI (Elsewedy is one company, so
+      // "where do they work" doesn't apply) — the underlying field and
+      // its shape check are unchanged, just the wording shown to admins.
       if (value.length < 2) {
         return { valid: false, reason: "Must be at least 2 characters." };
       }
@@ -214,16 +247,108 @@ function isPlausibleGraduationYear(v: unknown): boolean {
   return typeof v === "number" && Number.isInteger(v) && v >= 1950 && v <= CURRENT_YEAR + 1;
 }
 
-// The union of every accepted GPA scale (0-4.0, 0.7-4.0 German, 0-100
-// percentage) collapses to this one range, since the first two both sit
-// entirely inside the third.
-function isValidGpa(v: unknown): boolean {
+// GPA is stored as TEXT now ("2.5/4.0 (American)"), not a bare number —
+// a plain "1.3" is genuinely ambiguous between an excellent German grade
+// and a nearly-failing American one, since both scales share the same 4.0
+// denominator. Tagging the scale removes the ambiguity at effectively zero
+// extra admin effort (one dropdown, already being filled in anyway).
+export const GPA_SCALES = {
+  american: { label: "American (0-4.0)", min: 0, max: 4, denom: "4.0", name: "American" },
+  german: { label: "German (0.7-4.0)", min: 0.7, max: 4, denom: "4.0", name: "German" },
+  other: { label: "Egyptian or Other (0-100)", min: 0, max: 100, denom: "100", name: "Other" },
+} as const;
+export type GpaScale = keyof typeof GPA_SCALES;
+
+// Validates a raw number against the chosen scale's range, and — if valid —
+// returns the fully-formatted string to actually store, e.g. "2.5/4.0
+// (American)". Used by the form, which collects the scale via its own
+// dropdown rather than trying to parse it back out of free text.
+export function validateGpaValue(scale: GpaScale, rawValue: number): FieldValidation {
+  const cfg = GPA_SCALES[scale];
+  if (typeof rawValue !== "number" || Number.isNaN(rawValue) || rawValue < cfg.min || rawValue > cfg.max) {
+    return { valid: false, reason: `Must be between ${cfg.min} and ${cfg.max} on the ${cfg.label} scale.` };
+  }
+  return { valid: true, normalized: `${rawValue}/${cfg.denom} (${cfg.name})` };
+}
+
+// The lenient fallback for GPA arriving as a bare number from natural-
+// language extraction (an update mentioned in chat, not the create form) —
+// Gemini has no scale dropdown to draw from, so there's no way to know
+// which scale a casual "GPA is 3.5" refers to. Kept permissive (union of
+// every scale's range) rather than rejecting these outright, and stored
+// WITHOUT a scale tag, honestly reflecting that it wasn't specified.
+function isValidGpaNumber(v: unknown): boolean {
   return typeof v === "number" && v >= 0 && v <= 100;
 }
-const GPA_HINT = "Must be a GPA on one of: 0-4.0 (standard scale), 0.7-4.0 (German scale), or 0-100 (percentage grade).";
+export const GPA_HINT = "Must be a GPA on one of: 0-4.0 (standard scale), 0.7-4.0 (German scale), or 0-100 (percentage grade).";
 
 function isValidProficiency(v: unknown): boolean {
   return typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 100;
+}
+
+// Which sub-fields each relation has, split into required (a bad value
+// invalidates the whole entry) and optional (a bad value just drops that
+// one field). Exported so the form knows which inputs to render and which
+// to mark optional — same lists the entry validators below enforce.
+export const RELATION_FIELDS = {
+  experience: { required: ["jobTitle", "company", "startDate", "endDate"], optional: ["description"] },
+  education: { required: ["degree", "fieldOfStudy", "institution", "graduationYear"], optional: ["gpa"] },
+  certificates: { required: ["certName", "issuer", "issueDate"], optional: ["expiryDate"] },
+  skills: { required: ["category", "name", "proficiency"], optional: [] },
+} as const;
+
+export type RelationKey = keyof typeof RELATION_FIELDS;
+
+// Per-field validation for a single relation sub-field, returning the same
+// FieldValidation shape as validateFieldValue. Built on the SAME primitives
+// (isValidDate, validateEndDate, isPlausibleGraduationYear, isValidGpaNumber,
+// isValidProficiency, isNonEmptyText) the server-side entry validators use,
+// so the form's inline errors and the server's checks can't diverge on what
+// counts as valid. The form calls this for live per-field feedback — except
+// gpa, which the form handles separately via validateGpaValue since it's a
+// compound (value + scale) field, not a single one.
+export function validateRelationField(
+  relationKey: RelationKey,
+  field: string,
+  value: unknown
+): FieldValidation {
+  if (relationKey === "experience" && field === "endDate") {
+    const r = validateEndDate(value);
+    return r.valid ? r : { valid: false, reason: 'Must be a real date, or "Current" for an ongoing role.' };
+  }
+  if (
+    (relationKey === "experience" && field === "startDate") ||
+    (relationKey === "certificates" && (field === "issueDate" || field === "expiryDate"))
+  ) {
+    return isValidDate(value) ? { valid: true } : { valid: false, reason: "Must be a real date (YYYY-MM-DD)." };
+  }
+  if (relationKey === "education" && field === "graduationYear") {
+    return isPlausibleGraduationYear(value)
+      ? { valid: true }
+      : { valid: false, reason: `Must be a year between 1950 and ${CURRENT_YEAR + 1}.` };
+  }
+  if (relationKey === "education" && field === "gpa") {
+    // Lenient fallback for a bare number with no scale context (see
+    // isValidGpaNumber above) — the form itself never reaches this branch.
+    return isValidGpaNumber(value) ? { valid: true } : { valid: false, reason: GPA_HINT };
+  }
+  if (relationKey === "skills" && field === "proficiency") {
+    return isValidProficiency(value)
+      ? { valid: true }
+      : { valid: false, reason: "Must be a whole number from 0 to 100." };
+  }
+  if (relationKey === "skills" && field === "category") {
+    const c = typeof value === "string" ? value.toLowerCase() : "";
+    return c === "technical" || c === "language"
+      ? { valid: true, normalized: c }
+      : { valid: false, reason: 'Must be "technical" or "language".' };
+  }
+  // experience.description is the only optional free-text field — anything
+  // goes (including empty). Every other field here is required free text.
+  if (relationKey === "experience" && field === "description") {
+    return { valid: true };
+  }
+  return isNonEmptyText(value) ? { valid: true } : { valid: false, reason: "This field is required." };
 }
 
 interface RelationCheck {
@@ -281,12 +406,20 @@ function validateEducationEntries(entries: unknown): RelationCheck {
       institution: e.institution,
       graduationYear: e.graduationYear,
     };
-    if (e.gpa !== undefined && e.gpa !== null) {
-      if (isValidGpa(e.gpa)) {
-        entry.gpa = e.gpa;
+    // gpa arrives in one of two shapes: a bare number from natural-language
+    // extraction (no scale info available — validated leniently, stored as
+    // plain text with no scale tag), or an already-formatted string like
+    // "2.5/4.0 (American)" from the create form (which built and validated
+    // it itself via validateGpaValue) — trusted as-is here, the same way
+    // other free-text fields are.
+    if (typeof e.gpa === "number") {
+      if (isValidGpaNumber(e.gpa)) {
+        entry.gpa = String(e.gpa);
       } else {
         warnings.push(`"${e.gpa}" for ${label}'s GPA was left out — ${GPA_HINT}`);
       }
+    } else if (isNonEmptyText(e.gpa)) {
+      entry.gpa = e.gpa;
     }
     cleaned.push(entry);
   });

@@ -13,7 +13,10 @@ export const BASIC_INFO_FIELDS = [
 export const BASIC_INFO_LABELS: Record<string, string> = {
   fullName: "Full Name", phone: "Phone", birthDate: "Birth Date",
   nationality: "Nationality", maritalStatus: "Marital Status", email: "Email",
-  workLocation: "Work Location", gender: "Gender", nationalId: "National ID",
+  // Underlying field is still `workLocation` (no schema change) — relabeled
+  // "Department" since Elsewedy is one company, so "where do they work"
+  // doesn't apply the way "which department" does.
+  workLocation: "Department", gender: "Gender", nationalId: "National ID",
   militaryStatus: "Military Status",
 };
 

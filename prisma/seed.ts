@@ -94,7 +94,8 @@ function makeNationalId(year: number, month: number, day: number): string {
 }
 
 function emailFromName(name: string): string {
-  return `${name.toLowerCase().replace(/\s+/g, ".")}@company.com`;
+  // Must match the current employee-email rule: exact-case @elsewedy.com.
+  return `${name.toLowerCase().replace(/\s+/g, ".")}@elsewedy.com`;
 }
 
 // A field is dropped to null/undefined with the given likelihood; otherwise
@@ -168,7 +169,10 @@ async function main() {
           fieldOfStudy: pick(FIELDS_OF_STUDY),
           institution: pick(INSTITUTIONS),
           graduationYear: 2015 + Math.floor(Math.random() * 11),
-          gpa: maybeValue(0.5, () => Number((2.5 + Math.random() * 1.5).toFixed(2))),
+          // gpa is text now, tagged with its scale (e.g. "3.24/4.0
+          // (American)") — the seed always generates American-scale
+          // values, same range as before (2.5-4.0).
+          gpa: maybeValue(0.5, () => `${(2.5 + Math.random() * 1.5).toFixed(2)}/4.0 (American)`),
         },
       });
     }

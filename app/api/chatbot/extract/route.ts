@@ -180,11 +180,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ action: "askIdentity", data: newData, warnings });
     }
 
+    // A genuine "create a new employee" — hand off to the structured form
+    // instead of interrogating the admin one field at a time. Whatever
+    // Gemini already pulled out of the opening message (newData) rides along
+    // as pre-fill, so the admin only fills the gaps. The form itself is the
+    // create path now; the old one-by-one needsInfo flow is no longer used
+    // for creates.
     if (action === "create") {
-      const nextField = findNextMissingField(newData);
-      if (nextField) {
-        return NextResponse.json({ action: "needsInfo", field: nextField, data: newData, warnings });
-      }
+      return NextResponse.json({ action: "createForm", data: newData, warnings });
     }
 
     return NextResponse.json({ action, matches, data: newData, warnings });
