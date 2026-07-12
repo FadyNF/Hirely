@@ -13,9 +13,20 @@ import ExcelJS from "exceljs";
 
 // The subset of an Employee (with relations) this workbook renders. Kept
 // loose (all optional) so both a full DB record and a partial one work.
+// Shared by the single-employee builder AND the batch export builder — the
+// batch sheet needs every scalar field plus all relations, not just the
+// ones the single-employee template's fixed layout happens to show.
 export interface EmployeeWorkbookData {
   fullName?: string | null;
+  phone?: string | null;
+  birthDate?: string | null;
+  nationality?: string | null;
+  maritalStatus?: string | null;
+  email?: string | null;
   workLocation?: string | null;
+  gender?: string | null;
+  nationalId?: string | null;
+  militaryStatus?: string | null;
   companyID?: string | null;
   hiringDate?: string | null;
   position?: string | null;
@@ -23,9 +34,9 @@ export interface EmployeeWorkbookData {
   yearsExpPrev?: number | null;
   yearsExpElsewedy?: number | null;
   totalExperience?: number | null;
-  // "Graduation" / "Graduation year" in the template come from the first
-  // education entry's fieldOfStudy / graduationYear (that's how the parser
-  // maps them in reverse).
+  // "Graduation" / "Graduation year" in the single-employee template come
+  // from the first education entry's fieldOfStudy / graduationYear (that's
+  // how the parser maps them in reverse).
   education?: Array<{
     degree?: string | null;
     fieldOfStudy?: string | null;
@@ -38,11 +49,19 @@ export interface EmployeeWorkbookData {
     company?: string | null;
     startDate?: string | null;
     endDate?: string | null;
+    description?: string | null;
   }>;
   certificates?: Array<{
     certName?: string | null;
     issuer?: string | null;
+    issueDate?: string | null;
+    expiryDate?: string | null;
     rawText?: string | null;
+  }>;
+  skills?: Array<{
+    category?: string | null;
+    name?: string | null;
+    proficiency?: number | null;
   }>;
   performanceReviews?: Array<{
     quarter?: string | null;

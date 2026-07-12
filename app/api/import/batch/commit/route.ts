@@ -30,6 +30,7 @@ export async function POST(request: NextRequest) {
 
   let created = 0;
   const failed: { rowNumber: number; error: string }[] = [];
+  const RELATION_KEYS = ["experience", "education", "certificates", "skills", "performanceReviews"] as const;
 
   for (const row of rows) {
     const { cleaned, valid } = validateBatchRow(row.data || {});
@@ -37,8 +38,23 @@ export async function POST(request: NextRequest) {
       failed.push({ rowNumber: row.rowNumber, error: "Row failed validation and was skipped." });
       continue;
     }
+
+    // validateBatchRow merges relation arrays straight into `cleaned`
+    // (e.g. cleaned.experience = [...]) — Prisma's nested-write syntax needs
+    // { experience: { create: [...] } }, not the bare array, so split them
+    // out here rather than handing `cleaned` to Prisma as-is.
+    const scalarData: Record<string, unknown> = {};
+    const relationData: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(cleaned)) {
+      if ((RELATION_KEYS as readonly string[]).includes(key)) {
+        if (Array.isArray(value) && value.length) relationData[key] = { create: value };
+      } else {
+        scalarData[key] = value;
+      }
+    }
+
     try {
-      await prisma.employee.create({ data: cleaned as never });
+      await prisma.employee.create({ data: { ...scalarData, ...relationData } as never });
       created++;
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {

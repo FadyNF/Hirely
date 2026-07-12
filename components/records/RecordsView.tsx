@@ -12,6 +12,7 @@ import { useRouter } from 'next/navigation';
 import { BASIC_INFO_FIELDS, BASIC_INFO_LABELS, MULTI_TAB_CONFIG, SKILL_CATEGORIES } from '@/lib/tabConfig';
 import type { SerializedEmployee } from '@/lib/employees';
 import { useAuth } from '@/context/AuthContext';
+import { ENUM_OPTIONS } from '@/lib/chatbotValidate';
 
 // Triggers a browser download from an auth-gated route (authFetch handles
 // the cookie + 401 refresh; a plain <a href> would skip the retry).
@@ -322,7 +323,21 @@ interface ReviewedRow {
   rowNumber: number;
   data: Record<string, unknown>;
   errors: Record<string, string>;
+  relationWarnings: string[];
   valid: boolean;
+}
+
+const RELATION_LABELS_BATCH: Record<string, string> = {
+  experience: 'exp', education: 'edu', certificates: 'cert', skills: 'skill', performanceReviews: 'review',
+};
+
+function relationSummary(data: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const [key, label] of Object.entries(RELATION_LABELS_BATCH)) {
+    const arr = data[key];
+    if (Array.isArray(arr) && arr.length > 0) parts.push(`${arr.length} ${label}${arr.length > 1 ? 's' : ''}`);
+  }
+  return parts.join(', ');
 }
 
 function BatchImportModal({ onClose, onImported }: { onClose: () => void; onImported: () => void }) {
@@ -466,6 +481,7 @@ function BatchImportModal({ onClose, onImported }: { onClose: () => void; onImpo
                       <th className="p-2 text-left" style={{ color: COLORS.gray }}>Full Name</th>
                       <th className="p-2 text-left" style={{ color: COLORS.gray }}>Email</th>
                       <th className="p-2 text-left" style={{ color: COLORS.gray }}>Department</th>
+                      <th className="p-2 text-left" style={{ color: COLORS.gray }}>Relations</th>
                       <th className="p-2 text-left" style={{ color: COLORS.gray }}>Status</th>
                     </tr>
                   </thead>
@@ -479,11 +495,17 @@ function BatchImportModal({ onClose, onImported }: { onClose: () => void; onImpo
                         <td className="p-2" style={{ color: COLORS.black }}>{String(r.data.fullName ?? r.errors.fullName ? (r.data.fullName ?? '—') : '—')}</td>
                         <td className="p-2" style={{ color: COLORS.gray }}>{String(r.data.email ?? '—')}</td>
                         <td className="p-2" style={{ color: COLORS.gray }}>{String(r.data.workLocation ?? '—')}</td>
+                        <td className="p-2" style={{ color: COLORS.gray }}>{relationSummary(r.data) || '—'}</td>
                         <td className="p-2">
                           {r.valid ? (
                             <span style={{ color: '#16A34A' }}>Ready</span>
                           ) : (
                             <span style={{ color: COLORS.red }}>{Object.entries(r.errors).map(([f, m]) => `${f}: ${m}`).join('; ')}</span>
+                          )}
+                          {r.relationWarnings.length > 0 && (
+                            <span style={{ color: '#B45309' }} className="block mt-0.5">
+                              {r.relationWarnings.join('; ')}
+                            </span>
                           )}
                         </td>
                       </tr>
@@ -517,23 +539,39 @@ function BatchImportModal({ onClose, onImported }: { onClose: () => void; onImpo
 
 // ---- Main component ----
 
+const EMPTY_FILTERS = { workLocation: '', gender: '', nationality: '', maritalStatus: '', militaryStatus: '' };
+type RecordsFilters = typeof EMPTY_FILTERS;
+
 export default function RecordsView({ employees }: { employees: SerializedEmployee[] }) {
   const { authFetch } = useAuth();
   const [query, setQuery] = useState('');
+  const [filters, setFilters] = useState<RecordsFilters>(EMPTY_FILTERS);
   const [currentPage, setCurrentPage] = useState(1);
   const [modalEmployeeId, setModalEmployeeId] = useState<number | null>(null);
   const [batchOpen, setBatchOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
 
-  // Export what the admin is currently looking at: pass the live search so
-  // the sheet contains exactly the filtered subset (or everyone if blank).
+  const hasActiveFilter = Boolean(query.trim()) || Object.values(filters).some((v) => v);
+
+  // Department has no fixed enum (free text on Employee) — offer whatever
+  // departments actually exist in the data rather than a hardcoded list.
+  const departmentOptions = Array.from(new Set(employees.map((e) => e.workLocation).filter((v): v is string => Boolean(v)))).sort();
+
+  // Export what the admin is currently looking at: same search + filters,
+  // so the sheet always matches exactly what's on screen.
   const handleExport = async () => {
     if (exporting) return;
     setExporting(true);
     try {
-      const q = query.trim();
-      const url = q ? `/api/export/batch?search=${encodeURIComponent(q)}` : '/api/export/batch';
-      await downloadFromRoute(authFetch, url, 'employees.xlsx');
+      const params = new URLSearchParams();
+      if (query.trim()) params.set('search', query.trim());
+      if (filters.workLocation) params.set('department', filters.workLocation);
+      if (filters.gender) params.set('gender', filters.gender);
+      if (filters.nationality) params.set('nationality', filters.nationality);
+      if (filters.maritalStatus) params.set('maritalStatus', filters.maritalStatus);
+      if (filters.militaryStatus) params.set('militaryStatus', filters.militaryStatus);
+      const qs = params.toString();
+      await downloadFromRoute(authFetch, qs ? `/api/export/batch?${qs}` : '/api/export/batch', 'employees.xlsx');
     } finally {
       setExporting(false);
     }
@@ -541,8 +579,13 @@ export default function RecordsView({ employees }: { employees: SerializedEmploy
 
   const filtered = employees.filter((e) => {
     const q = query.toLowerCase().trim();
-    if (!q) return true;
-    return e.fullName.toLowerCase().includes(q) || String(e.id).includes(q);
+    if (q && !(e.fullName.toLowerCase().includes(q) || String(e.id).includes(q))) return false;
+    if (filters.workLocation && e.workLocation !== filters.workLocation) return false;
+    if (filters.gender && e.gender !== filters.gender) return false;
+    if (filters.nationality && e.nationality !== filters.nationality) return false;
+    if (filters.maritalStatus && e.maritalStatus !== filters.maritalStatus) return false;
+    if (filters.militaryStatus && e.militaryStatus !== filters.militaryStatus) return false;
+    return true;
   });
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -552,6 +595,17 @@ export default function RecordsView({ employees }: { employees: SerializedEmploy
 
   const handleSearchChange = (value: string) => {
     setQuery(value);
+    setCurrentPage(1);
+  };
+
+  const setFilter = (key: keyof RecordsFilters, value: string) => {
+    setFilters((prev) => ({ ...prev, [key]: value }));
+    setCurrentPage(1);
+  };
+
+  const clearFilters = () => {
+    setQuery('');
+    setFilters(EMPTY_FILTERS);
     setCurrentPage(1);
   };
 
@@ -591,9 +645,62 @@ export default function RecordsView({ employees }: { employees: SerializedEmploy
             className="text-sm font-medium px-3 py-2 rounded-lg border transition-colors hover:bg-gray-50 disabled:opacity-50"
             style={{ borderColor: COLORS.border, color: COLORS.black }}
           >
-            {exporting ? 'Exporting…' : query.trim() ? 'Export filtered' : 'Export all'}
+            {exporting ? 'Exporting…' : hasActiveFilter ? 'Export filtered' : 'Export all'}
           </button>
         </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          value={filters.workLocation}
+          onChange={(e) => setFilter('workLocation', e.target.value)}
+          className="rounded-lg border px-2.5 py-1.5 text-xs outline-none"
+          style={{ borderColor: COLORS.border, color: filters.workLocation ? COLORS.black : COLORS.gray }}
+        >
+          <option value="">All departments</option>
+          {departmentOptions.map((d) => <option key={d} value={d}>{d}</option>)}
+        </select>
+        <select
+          value={filters.gender}
+          onChange={(e) => setFilter('gender', e.target.value)}
+          className="rounded-lg border px-2.5 py-1.5 text-xs outline-none"
+          style={{ borderColor: COLORS.border, color: filters.gender ? COLORS.black : COLORS.gray }}
+        >
+          <option value="">All genders</option>
+          {ENUM_OPTIONS.gender.map((g) => <option key={g} value={g}>{g}</option>)}
+        </select>
+        <select
+          value={filters.nationality}
+          onChange={(e) => setFilter('nationality', e.target.value)}
+          className="rounded-lg border px-2.5 py-1.5 text-xs outline-none"
+          style={{ borderColor: COLORS.border, color: filters.nationality ? COLORS.black : COLORS.gray }}
+        >
+          <option value="">All nationalities</option>
+          {ENUM_OPTIONS.nationality.map((n) => <option key={n} value={n}>{n}</option>)}
+        </select>
+        <select
+          value={filters.maritalStatus}
+          onChange={(e) => setFilter('maritalStatus', e.target.value)}
+          className="rounded-lg border px-2.5 py-1.5 text-xs outline-none"
+          style={{ borderColor: COLORS.border, color: filters.maritalStatus ? COLORS.black : COLORS.gray }}
+        >
+          <option value="">All marital statuses</option>
+          {ENUM_OPTIONS.maritalStatus.map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
+        <select
+          value={filters.militaryStatus}
+          onChange={(e) => setFilter('militaryStatus', e.target.value)}
+          className="rounded-lg border px-2.5 py-1.5 text-xs outline-none"
+          style={{ borderColor: COLORS.border, color: filters.militaryStatus ? COLORS.black : COLORS.gray }}
+        >
+          <option value="">All military statuses</option>
+          {ENUM_OPTIONS.militaryStatus.map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
+        {hasActiveFilter && (
+          <button onClick={clearFilters} className="text-xs underline underline-offset-2" style={{ color: COLORS.red }}>
+            Clear filters
+          </button>
+        )}
       </div>
 
       <RecordsTable employees={pageItems} onViewMore={setModalEmployeeId} />

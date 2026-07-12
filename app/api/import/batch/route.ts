@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
 
     const reviewed = rows.map(({ rowNumber, data }) => {
       // `valid` is recomputed below after adding in-file duplicate errors.
-      const { cleaned, errors } = validateBatchRow(data);
+      const { cleaned, errors, relationWarnings } = validateBatchRow(data);
       const nid = cleaned.nationalId;
       if (typeof nid === "string") {
         if (seenNationalId.has(nid)) errors.nationalId = `Duplicate National ID in this file (also row ${seenNationalId.get(nid)}).`;
@@ -57,7 +57,7 @@ export async function POST(request: NextRequest) {
         if (seenCompanyId.has(cid)) errors.companyID = `Duplicate Company ID in this file (also row ${seenCompanyId.get(cid)}).`;
         else seenCompanyId.set(cid, rowNumber);
       }
-      return { rowNumber, data: cleaned, rawData: data, errors, valid: Object.keys(errors).length === 0 };
+      return { rowNumber, data: cleaned, rawData: data, errors, relationWarnings, valid: Object.keys(errors).length === 0 };
     });
 
     return NextResponse.json({ rows: reviewed, warnings });

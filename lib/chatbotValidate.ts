@@ -616,21 +616,29 @@ export function validateExtractedFields(data: Record<string, unknown>) {
   return { cleaned, warnings };
 }
 
-// Validates one row of the batch (tabular) import — scalar fields only.
-// Unlike validateExtractedFields (which silently drops bad fields and
-// returns prose warnings), this returns a STRUCTURED per-field error map so
-// the batch review table can flag exactly which cell in which row is wrong,
-// and a `valid` flag so rows can be selected/deselected for import. fullName
-// is required (it's the one NOT NULL Employee column).
+// Validates one row of the batch (tabular) import — scalar fields drive
+// `errors`/`valid` (a bad scalar makes the whole row unselectable, shown in
+// the review table). Unlike validateExtractedFields (prose warnings, no
+// per-field map), this returns a STRUCTURED per-field error map so the
+// review table can flag exactly which cell is wrong. fullName is required
+// (it's the one NOT NULL Employee column).
+//
+// Relation entries (data.experience, data.education, etc. — reconstructed
+// by batchParser from the numbered slot columns) are validated separately
+// via the SAME per-relation validators the chatbot/single-import flows use:
+// a bad individual entry just drops that one entry (with a warning), it
+// does NOT invalidate the whole row the way a bad scalar field does.
 export function validateBatchRow(data: Record<string, unknown>): {
   cleaned: Record<string, unknown>;
   errors: Record<string, string>;
   valid: boolean;
+  relationWarnings: string[];
 } {
   const cleaned: Record<string, unknown> = {};
   const errors: Record<string, string> = {};
 
   for (const [field, rawValue] of Object.entries(data)) {
+    if (field in RELATION_VALIDATORS) continue; // handled below, not a scalar
     if (rawValue === null || rawValue === undefined || rawValue === "") continue;
     const stringValue = String(rawValue).trim();
     if (stringValue.length === 0) continue;
@@ -647,5 +655,13 @@ export function validateBatchRow(data: Record<string, unknown>): {
 
   if (!cleaned.fullName) errors.fullName = "Full name is required.";
 
-  return { cleaned, errors, valid: Object.keys(errors).length === 0 };
+  const relationWarnings: string[] = [];
+  for (const [field, validate] of Object.entries(RELATION_VALIDATORS)) {
+    if (!(field in data)) continue;
+    const { cleaned: cleanedEntries, warnings } = validate(data[field]);
+    if (cleanedEntries.length > 0) cleaned[field] = cleanedEntries;
+    relationWarnings.push(...warnings);
+  }
+
+  return { cleaned, errors, valid: Object.keys(errors).length === 0, relationWarnings };
 }
