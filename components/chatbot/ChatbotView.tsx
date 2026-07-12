@@ -18,10 +18,13 @@ import {
   faUserPlus, faUserPen, faCircleQuestion, faIdCard,
   faBriefcase, faGraduationCap, faCertificate, faBolt,
   faPaperclip, faSpinner, faCircleExclamation, faFileExcel,
+  faFileArrowUp, faFileArrowDown, faUser, faUsers,
+  faChevronRight, faChevronDown, faPlus,
 } from '@fortawesome/free-solid-svg-icons';
 import { BASIC_INFO_FIELDS, BASIC_INFO_LABELS } from '@/lib/tabConfig';
 import { useAuth } from '@/context/AuthContext';
 import EmployeeForm, { type BuiltEmployeeData, type SubmitResult } from './EmployeeForm';
+import BatchImportModal from '@/components/shared/BatchImportModal';
 
 const RELATION_LABELS: Record<string, string> = {
   experience: 'Experience', education: 'Education',
@@ -575,6 +578,101 @@ const QUICK_ACTIONS: QuickAction[] = [
   { type: 'upload', label: 'Import from Excel', icon: faFileExcel },
 ];
 
+// The paperclip's popup menu — click to expand "Import" or "Export", each
+// revealing its two file-shape options in place (an accordion, not a true
+// flyout submenu — simpler to position reliably next to a button that now
+// lives beside the input bar). Opens upward (bottom-full) since the input
+// bar sits near the bottom of the panel, same as Claude's chat attach menu.
+function AttachMenu({
+  onImportSingle,
+  onImportBatch,
+  onExportSingleTemplate,
+  onExportBatchTemplate,
+  onClose,
+}: {
+  onImportSingle: () => void;
+  onImportBatch: () => void;
+  onExportSingleTemplate: () => void;
+  onExportBatchTemplate: () => void;
+  onClose: () => void;
+}) {
+  const [section, setSection] = useState<'import' | 'export' | null>('import');
+
+  const sections: {
+    key: 'import' | 'export';
+    label: string;
+    icon: typeof faFileArrowUp;
+    options: { label: string; icon: typeof faUser; onClick: () => void }[];
+  }[] = [
+    {
+      key: 'import',
+      label: 'Import',
+      icon: faFileArrowUp,
+      options: [
+        { label: 'Single employee', icon: faUser, onClick: onImportSingle },
+        { label: 'Batch', icon: faUsers, onClick: onImportBatch },
+      ],
+    },
+    {
+      key: 'export',
+      label: 'Export',
+      icon: faFileArrowDown,
+      options: [
+        { label: 'Single employee template', icon: faUser, onClick: onExportSingleTemplate },
+        { label: 'Batch template', icon: faUsers, onClick: onExportBatchTemplate },
+      ],
+    },
+  ];
+
+  return (
+    <>
+      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <div
+        className="absolute bottom-full left-0 mb-2 w-60 bg-white rounded-xl shadow-lg border z-50 overflow-hidden"
+        style={{ borderColor: COLORS.border }}
+      >
+        {sections.map((s) => (
+          <div key={s.key}>
+            <button
+              onClick={() => setSection((cur) => (cur === s.key ? null : s.key))}
+              className="w-full flex items-center justify-between gap-2 px-3.5 py-2.5 text-sm hover:bg-gray-50 transition-colors"
+              style={{ color: COLORS.black }}
+            >
+              <span className="flex items-center gap-2.5">
+                <FontAwesomeIcon icon={s.icon} className="text-xs w-3.5" style={{ color: COLORS.red }} />
+                {s.label}
+              </span>
+              <FontAwesomeIcon
+                icon={section === s.key ? faChevronDown : faChevronRight}
+                className="text-xs"
+                style={{ color: COLORS.gray }}
+              />
+            </button>
+            {section === s.key && (
+              <div className="border-t" style={{ borderColor: COLORS.border, backgroundColor: '#FAFAFA' }}>
+                {s.options.map((opt) => (
+                  <button
+                    key={opt.label}
+                    onClick={() => {
+                      opt.onClick();
+                      onClose();
+                    }}
+                    className="w-full flex items-center gap-2.5 pl-9 pr-3.5 py-2 text-sm hover:bg-gray-100 transition-colors text-left"
+                    style={{ color: COLORS.gray }}
+                  >
+                    <FontAwesomeIcon icon={opt.icon} className="text-xs w-3" />
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
 export default function ChatbotView() {
   const { authFetch } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -600,6 +698,16 @@ export default function ChatbotView() {
   const [importResultCounts, setImportResultCounts] = useState({ created: 0, skipped: 0 });
   const [isImporting, setIsImporting] = useState(false);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
+  // The paperclip's popup menu (click), and a dismissible callout pointing
+  // at it that's visible from the moment the page renders — not hover-
+  // triggered, since a hover tooltip is easy to never discover in the
+  // first place. Starts open, closes for good once dismissed (no
+  // persistence — same as the rest of the chat, nothing here survives
+  // a reload on purpose). Both now live beside the chat input, matching
+  // where Claude's own chat puts its attach control.
+  const [showAttachMenu, setShowAttachMenu] = useState(false);
+  const [showAttachCallout, setShowAttachCallout] = useState(true);
+  const [batchModalOpen, setBatchModalOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -971,6 +1079,30 @@ export default function ChatbotView() {
   const handleDownloadTemplate = () =>
     downloadFromRoute('/api/templates/single-employee', 'single-employee-template.xlsx');
 
+  const handleDownloadBatchTemplate = () =>
+    downloadFromRoute('/api/templates/batch', 'batch-employees-template.xlsx');
+
+  // Nothing here is persisted anywhere (no localStorage, no server-side
+  // history) — the conversation only ever lived in this component's state,
+  // so "new chat" is just resetting it back to the same values it started
+  // with.
+  const handleNewChat = () => {
+    setMessages([]);
+    setInput('');
+    setIsLoading(false);
+    setPendingCreateDraft(null);
+    setPendingCreateField(null);
+    setLastEmployee(null);
+    setFormInitialData(null);
+    setImportReviewQueue(null);
+    setImportReviewIndex(0);
+    setImportResultCounts({ created: 0, skipped: 0 });
+    setIsImporting(false);
+    setIsDraggingFile(false);
+    setShowAttachMenu(false);
+    setBatchModalOpen(false);
+  };
+
   const handleCancel = (messageId: string) => {
     setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, pending: undefined } : m)));
     setPendingCreateDraft(null);
@@ -997,34 +1129,72 @@ export default function ChatbotView() {
   };
 
   // ---- Shared input console — same component used in both welcome and chat views ----
+  // The paperclip (import/export) control now lives inside the input bar
+  // itself, to the left of the textarea — the same spot Claude's own chat
+  // puts its attach button — rather than up in the header.
   const renderInputArea = () => (
     <div className={showWelcome ? '' : 'bg-gradient-to-t from-white via-white to-transparent px-4 md:px-8 py-4 shrink-0'}>
       <div className="max-w-2xl mx-auto">
         <div
-          className="flex items-end bg-gray-100 border rounded-2xl p-1.5 shadow-sm focus-within:ring-4 transition-all"
+          className="flex items-end gap-1 bg-gray-100 border rounded-2xl p-1.5 shadow-sm focus-within:ring-4 transition-all"
           style={{ borderColor: COLORS.border }}
         >
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".xls,.xlsx"
-            multiple
-            className="hidden"
-            onChange={(e) => {
-              if (e.target.files && e.target.files.length > 0) handleFilesSelected(e.target.files);
-              e.target.value = ''; // allow re-selecting the same file(s) later
-            }}
-          />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isImporting}
-            className="p-3 rounded-xl transition-all shrink-0 disabled:opacity-50"
-            style={{ color: COLORS.gray, cursor: isImporting ? 'not-allowed' : 'pointer' }}
-            aria-label="Import employee data from Excel"
-            title="Import from Excel"
-          >
-            <FontAwesomeIcon icon={isImporting ? faSpinner : faPaperclip} className={isImporting ? 'text-sm animate-spin' : 'text-sm'} />
-          </button>
+          <div className="relative shrink-0">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xls,.xlsx"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) handleFilesSelected(e.target.files);
+                e.target.value = ''; // allow re-selecting the same file(s) later
+              }}
+            />
+            <button
+              onClick={() => { setShowAttachMenu((v) => !v); setShowAttachCallout(false); }}
+              disabled={isImporting}
+              className="p-2.5 rounded-xl transition-all disabled:opacity-50"
+              style={{
+                color: showAttachMenu ? COLORS.red : COLORS.gray,
+                backgroundColor: showAttachMenu ? COLORS.pinkBg : 'transparent',
+                cursor: isImporting ? 'not-allowed' : 'pointer',
+              }}
+              aria-label="Import or export employee data as Excel spreadsheets"
+            >
+              <FontAwesomeIcon icon={isImporting ? faSpinner : faPaperclip} className={isImporting ? 'text-lg animate-spin' : 'text-lg'} />
+            </button>
+
+            {showAttachCallout && !showAttachMenu && (
+              <div
+                className="absolute bottom-full left-0 mb-2 w-64 rounded-xl shadow-lg z-50 p-3.5"
+                style={{ backgroundColor: COLORS.red }}
+              >
+                <div className="absolute -bottom-1.5 left-5 w-3 h-3 rotate-45" style={{ backgroundColor: COLORS.red }} />
+                <button
+                  onClick={() => setShowAttachCallout(false)}
+                  className="absolute top-1.5 right-1.5 w-5 h-5 flex items-center justify-center rounded-full hover:bg-black/10 text-white"
+                  aria-label="Dismiss"
+                >
+                  <FontAwesomeIcon icon={faXmark} className="text-xs" />
+                </button>
+                <p className="text-sm text-white pr-4 leading-snug">
+                  You can import or export employee data as Excel spreadsheets here.
+                </p>
+              </div>
+            )}
+
+            {showAttachMenu && (
+              <AttachMenu
+                onImportSingle={() => fileInputRef.current?.click()}
+                onImportBatch={() => setBatchModalOpen(true)}
+                onExportSingleTemplate={handleDownloadTemplate}
+                onExportBatchTemplate={handleDownloadBatchTemplate}
+                onClose={() => setShowAttachMenu(false)}
+              />
+            )}
+          </div>
+
           <textarea
             ref={textareaRef}
             value={input}
@@ -1067,6 +1237,22 @@ export default function ChatbotView() {
         className="absolute inset-0 opacity-[0.04] pointer-events-none"
         style={{ backgroundImage: 'radial-gradient(#475569 1px, transparent 1px)', backgroundSize: '24px 24px' }}
       />
+
+      {/* Top-left corner: just the New chat control now — the paperclip
+          moved down beside the input bar (see renderInputArea). New chat
+          is an icon-only button, red and larger, for quick access. */}
+      <div className="flex items-center px-4 md:px-8 py-3 shrink-0 relative z-10">
+        {!showWelcome && (
+          <button
+            onClick={handleNewChat}
+            className="w-11 h-11 rounded-xl flex items-center justify-center transition-colors hover:bg-gray-50"
+            style={{ color: COLORS.red }}
+            aria-label="New chat"
+          >
+            <FontAwesomeIcon icon={faPlus} className="text-xl" />
+          </button>
+        )}
+      </div>
 
       {isDraggingFile && (
         <div
@@ -1221,6 +1407,10 @@ export default function ChatbotView() {
           onClose={handleImportFormCancel}
           progressLabel={`Reviewing ${importReviewIndex + 1} of ${importReviewQueue.length}`}
         />
+      )}
+
+      {batchModalOpen && (
+        <BatchImportModal onClose={() => setBatchModalOpen(false)} onImported={() => { /* the modal's own result screen already summarizes what happened */ }} />
       )}
     </div>
   );

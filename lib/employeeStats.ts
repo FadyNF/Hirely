@@ -58,6 +58,18 @@ export interface AttentionEmployee {
   missingFields: string[];
 }
 
+// A value the batch importer couldn't confidently accept and wrote anyway
+// (see prisma/schema.prisma's ReviewFlag model and lib/chatbotValidate.ts) —
+// surfaced here so the admin can actually find and fix it.
+export interface FlaggedField {
+  id: number;
+  employeeId: number;
+  employeeName: string;
+  field: string;
+  rawValue: string;
+  reason: string;
+}
+
 export interface DashboardData {
   totalEmployees: number;
   overallCompletion: number;
@@ -70,6 +82,7 @@ export interface DashboardData {
   recordStatus: RecordStatusBreakdown;
   completionDistribution: CompletionBucket[];
   attentionNeeded: AttentionEmployee[];
+  flaggedFields: FlaggedField[];
 }
 
 function computeBasicInfoStats(employees: EmployeeWithRelations[]) {
@@ -237,8 +250,38 @@ function computeAttentionNeeded(employees: EmployeeWithRelations[], limit = 8): 
     .slice(0, limit);
 }
 
+// ReviewFlag.field is either a bare Employee column name ("email") or
+// "<relationKey>[<index>].<field>" (e.g. "experience[0].startDate") — see
+// the model comment in prisma/schema.prisma. Maps either shape back to the
+// tabOverview key it should count against.
+function reviewFlagTabKey(field: string): string {
+  const match = field.match(/^(\w+)\[/);
+  if (!match) return "basicInfo";
+  return match[1] === "performanceReviews" ? "performance" : match[1];
+}
+
 export async function getDashboardData(): Promise<DashboardData> {
   const employees = await getAllEmployees();
+
+  const openFlags = await prisma.reviewFlag.findMany({
+    where: { resolved: false },
+    include: { employee: { select: { fullName: true } } },
+    orderBy: { createdAt: "desc" },
+  });
+  const needsReviewCount = new Set(openFlags.map((f) => f.employeeId)).size;
+  const reviewCountByTab: Record<string, number> = {};
+  for (const f of openFlags) {
+    const tabKey = reviewFlagTabKey(f.field);
+    reviewCountByTab[tabKey] = (reviewCountByTab[tabKey] ?? 0) + 1;
+  }
+  const flaggedFields: FlaggedField[] = openFlags.map((f) => ({
+    id: f.id,
+    employeeId: f.employeeId,
+    employeeName: f.employee.fullName || "(No name on file)",
+    field: f.field,
+    rawValue: f.rawValue,
+    reason: f.reason,
+  }));
 
   const basicInfo = computeBasicInfoStats(employees);
 
@@ -254,20 +297,20 @@ export async function getDashboardData(): Promise<DashboardData> {
   const attentionNeeded = computeAttentionNeeded(employees);
 
   const tabOverview: TabOverviewRow[] = [
-    { key: "basicInfo", label: "Basic Info", overallGap: basicInfo.overallGap, reviewCount: 0 },
+    { key: "basicInfo", label: "Basic Info", overallGap: basicInfo.overallGap, reviewCount: reviewCountByTab.basicInfo ?? 0 },
     ...MULTI_TAB_CONFIG.map((c) => ({
       key: c.key,
       label: c.label,
       overallGap: multiTabs[c.key].overallGap,
-      reviewCount: 0,
+      reviewCount: reviewCountByTab[c.key] ?? 0,
     })),
     {
       key: "skills",
       label: "Skills",
       overallGap: Math.round(100 - skills.reduce((sum, s) => sum + s.coverage, 0) / skills.length),
-      reviewCount: 0,
+      reviewCount: reviewCountByTab.skills ?? 0,
     },
-    { key: "performance", label: "Performance", overallGap: null, reviewCount: 0 },
+    { key: "performance", label: "Performance", overallGap: null, reviewCount: reviewCountByTab.performance ?? 0 },
   ];
 
   const gapRows = tabOverview.filter((r) => r.overallGap !== null) as (TabOverviewRow & { overallGap: number })[];
@@ -278,7 +321,7 @@ export async function getDashboardData(): Promise<DashboardData> {
   return {
     totalEmployees: employees.length,
     overallCompletion,
-    needsReviewCount: 0,
+    needsReviewCount,
     basicInfo,
     multiTabs,
     skills,
@@ -287,5 +330,6 @@ export async function getDashboardData(): Promise<DashboardData> {
     recordStatus,
     completionDistribution,
     attentionNeeded,
+    flaggedFields,
   };
 }

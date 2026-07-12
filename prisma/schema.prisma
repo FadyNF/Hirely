@@ -75,6 +75,29 @@ model Employee {
   certificates       Certificate[]
   skills             Skill[]
   performanceReviews PerformanceReview[]
+  reviewFlags        ReviewFlag[]
+}
+
+// A value the batch importer couldn't confidently accept, kept and written
+// anyway (as-is, unvalidated) rather than silently dropped — the admin
+// reviews and fixes it from the Dashboard instead of losing the record.
+model ReviewFlag {
+  id     Int @id @default(autoincrement())
+
+  // For a top-level Employee column: just the field name, e.g. "email".
+  // For a relation entry: "<relation>[<index>].<field>", e.g.
+  // "experience[0].startDate" — the index matches the entry's position in
+  // that employee's relation array at the time of import (relation rows
+  // don't get their own flaggable identity; this is a human-readable
+  // pointer, not a foreign key).
+  field    String
+  rawValue String
+  reason   String
+  resolved Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  employeeId Int
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 }
 
 model Experience {

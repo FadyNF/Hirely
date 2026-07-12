@@ -1,5 +1,6 @@
 // app/app/records/page.tsx
 
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { requireUserIdFromServerCookies } from "@/lib/requireAuth";
 import { getAllEmployees } from "@/lib/employees";
@@ -16,5 +17,12 @@ export default async function RecordsPage() {
   // Component — only plain serializable data can cross that boundary.
   const serialized = employees.map(({ createdAt, ...rest }) => rest);
 
-  return <RecordsView employees={serialized} />;
+  // RecordsView reads ?highlight= via useSearchParams (to deep-link from the
+  // Dashboard's "Flagged for review" list) — Next.js requires that behind a
+  // Suspense boundary.
+  return (
+    <Suspense>
+      <RecordsView employees={serialized} />
+    </Suspense>
+  );
 }

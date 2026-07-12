@@ -411,162 +411,284 @@ export function validateRelationField(
   return isNonEmptyText(value) ? { valid: true } : { valid: false, reason: "This field is required." };
 }
 
+// A single field the validator couldn't confidently accept, on either a
+// top-level Employee column ("employee" scope) or one entry of a relation
+// array (relation-key scope + entryIndex). Carries the original raw value
+// so a caller can either surface it for the admin to fix inline, or record
+// it as a ReviewFlag when the value is kept and written as-is.
+export interface FieldIssue {
+  scope: "employee" | RelationKey;
+  entryIndex?: number;
+  field: string;
+  rawValue: unknown;
+  reason: string;
+}
+
+interface RelationEntryResult {
+  data: Record<string, unknown>;
+  valid: boolean;
+}
+
 interface RelationCheck {
-  cleaned: Record<string, unknown>[];
-  warnings: string[];
+  entries: RelationEntryResult[];
+  issues: FieldIssue[];
+}
+
+// Every field on Experience/Education/Certificate/Skill/PerformanceReview
+// required in the schema is a String or a numeric column with NO format/
+// range CHECK constraint — SQLite will happily store "not a date" in a
+// startDate TEXT column, or 250 in a proficiency INTEGER column. So an
+// invalid REQUIRED field doesn't need to drop the whole entry: the raw
+// value (or a best-effort coercion, for the few numeric columns where a
+// non-numeric raw value genuinely can't be written at all) is kept and
+// written as-is, and the issue is reported so the caller can flag it for
+// review or offer it back to the admin to fix inline.
+function coerceRequiredNumber(rawValue: unknown, fallback: number, integer: boolean): number {
+  const n = typeof rawValue === "number" ? rawValue : Number(rawValue);
+  if (!Number.isFinite(n)) return fallback;
+  return integer ? Math.round(n) : n;
 }
 
 function validateExperienceEntries(entries: unknown): RelationCheck {
-  const cleaned: Record<string, unknown>[] = [];
-  const warnings: string[] = [];
-  if (!Array.isArray(entries)) return { cleaned, warnings };
+  const result: RelationEntryResult[] = [];
+  const issues: FieldIssue[] = [];
+  if (!Array.isArray(entries)) return { entries: result, issues };
 
-  entries.forEach((raw, i) => {
+  entries.forEach((raw, entryIndex) => {
     const e = raw as Record<string, unknown>;
-    const label = `Experience entry ${i + 1}`;
-    if (!isNonEmptyText(e.jobTitle)) return warnings.push(`${label} was left out — missing a job title.`);
-    if (!isNonEmptyText(e.company)) return warnings.push(`${label} was left out — missing a company.`);
-    if (!isValidDate(e.startDate)) return warnings.push(`${label} was left out — "${e.startDate}" isn't a real start date.`);
-    const end = validateEndDate(e.endDate);
-    if (!end.valid) return warnings.push(`${label} was left out — "${e.endDate}" isn't a real end date (or "Current").`);
+    const data: Record<string, unknown> = {};
+    let valid = true;
+    const flag = (field: string, rawValue: unknown, reason: string, fallback: unknown = "") => {
+      valid = false;
+      issues.push({ scope: "experience", entryIndex, field, rawValue, reason });
+      data[field] = rawValue ?? fallback;
+    };
 
-    cleaned.push({
-      jobTitle: e.jobTitle,
-      company: e.company,
-      startDate: e.startDate,
-      endDate: end.normalized ?? e.endDate,
-      // description is the one optional column here — kept only if it's
-      // actually a non-empty string, dropped silently otherwise (no
-      // warning, since leaving it out entirely is a valid choice).
-      ...(isNonEmptyText(e.description) ? { description: e.description } : {}),
-    });
+    if (isNonEmptyText(e.jobTitle)) data.jobTitle = e.jobTitle;
+    else flag("jobTitle", e.jobTitle, "Missing a job title.");
+
+    if (isNonEmptyText(e.company)) data.company = e.company;
+    else flag("company", e.company, "Missing a company.");
+
+    if (isValidDate(e.startDate)) data.startDate = e.startDate;
+    else flag("startDate", e.startDate, `"${e.startDate ?? ""}" isn't a real start date.`);
+
+    const end = validateEndDate(e.endDate);
+    if (end.valid) data.endDate = end.normalized ?? e.endDate;
+    else flag("endDate", e.endDate, `"${e.endDate ?? ""}" isn't a real end date (or "Current").`);
+
+    // description is the one optional column here — kept only if it's
+    // actually a non-empty string, dropped silently otherwise (no issue,
+    // since leaving it out entirely is a valid choice).
+    if (isNonEmptyText(e.description)) data.description = e.description;
+
+    result.push({ data, valid });
   });
 
-  return { cleaned, warnings };
+  return { entries: result, issues };
 }
 
 function validateEducationEntries(entries: unknown): RelationCheck {
-  const cleaned: Record<string, unknown>[] = [];
-  const warnings: string[] = [];
-  if (!Array.isArray(entries)) return { cleaned, warnings };
+  const result: RelationEntryResult[] = [];
+  const issues: FieldIssue[] = [];
+  if (!Array.isArray(entries)) return { entries: result, issues };
 
-  entries.forEach((raw, i) => {
+  entries.forEach((raw, entryIndex) => {
     const e = raw as Record<string, unknown>;
-    const label = `Education entry ${i + 1}`;
-    if (!isNonEmptyText(e.degree)) return warnings.push(`${label} was left out — missing a degree.`);
-    if (!isNonEmptyText(e.fieldOfStudy)) return warnings.push(`${label} was left out — missing a field of study.`);
-    if (!isNonEmptyText(e.institution)) return warnings.push(`${label} was left out — missing an institution.`);
-    if (!isPlausibleGraduationYear(e.graduationYear)) {
-      return warnings.push(`${label} was left out — "${e.graduationYear}" isn't a plausible graduation year.`);
+    const data: Record<string, unknown> = {};
+    let valid = true;
+    const flag = (field: string, rawValue: unknown, reason: string, fallback: unknown = "") => {
+      valid = false;
+      issues.push({ scope: "education", entryIndex, field, rawValue, reason });
+      data[field] = rawValue ?? fallback;
+    };
+
+    if (isNonEmptyText(e.degree)) data.degree = e.degree;
+    else flag("degree", e.degree, "Missing a degree.");
+
+    if (isNonEmptyText(e.fieldOfStudy)) data.fieldOfStudy = e.fieldOfStudy;
+    else flag("fieldOfStudy", e.fieldOfStudy, "Missing a field of study.");
+
+    if (isNonEmptyText(e.institution)) data.institution = e.institution;
+    else flag("institution", e.institution, "Missing an institution.");
+
+    if (isPlausibleGraduationYear(e.graduationYear)) {
+      data.graduationYear = e.graduationYear;
+    } else {
+      // graduationYear is an Int column — a non-numeric raw value (e.g.
+      // "sometime in 2019") can't be written at all, so it falls back to 0,
+      // an obviously-placeholder value distinct from any real year.
+      flag(
+        "graduationYear",
+        e.graduationYear,
+        `"${e.graduationYear ?? ""}" isn't a plausible graduation year.`,
+        coerceRequiredNumber(e.graduationYear, 0, true)
+      );
     }
 
-    const entry: Record<string, unknown> = {
-      degree: e.degree,
-      fieldOfStudy: e.fieldOfStudy,
-      institution: e.institution,
-      graduationYear: e.graduationYear,
-    };
-    // gpa arrives in one of two shapes: a bare number from natural-language
-    // extraction (no scale info available — validated leniently, stored as
-    // plain text with no scale tag), or an already-formatted string like
-    // "2.5/4.0 (American)" from the create form (which built and validated
-    // it itself via validateGpaValue) — trusted as-is here, the same way
-    // other free-text fields are.
+    // gpa is optional — arrives either as a bare number from natural-
+    // language extraction (no scale context — validated leniently, stored
+    // as plain text with no scale tag), or an already-formatted string like
+    // "2.5/4.0 (American)" from the form/template (trusted as-is, same as
+    // other free-text fields).
     if (typeof e.gpa === "number") {
       if (isValidGpaNumber(e.gpa)) {
-        entry.gpa = String(e.gpa);
+        data.gpa = String(e.gpa);
       } else {
-        warnings.push(`"${e.gpa}" for ${label}'s GPA was left out — ${GPA_HINT}`);
+        valid = false;
+        issues.push({ scope: "education", entryIndex, field: "gpa", rawValue: e.gpa, reason: GPA_HINT });
+        data.gpa = String(e.gpa);
       }
     } else if (isNonEmptyText(e.gpa)) {
-      entry.gpa = e.gpa;
+      data.gpa = e.gpa;
     }
-    cleaned.push(entry);
+
+    result.push({ data, valid });
   });
 
-  return { cleaned, warnings };
+  return { entries: result, issues };
 }
 
 function validateCertificateEntries(entries: unknown): RelationCheck {
-  const cleaned: Record<string, unknown>[] = [];
-  const warnings: string[] = [];
-  if (!Array.isArray(entries)) return { cleaned, warnings };
+  const result: RelationEntryResult[] = [];
+  const issues: FieldIssue[] = [];
+  if (!Array.isArray(entries)) return { entries: result, issues };
 
-  entries.forEach((raw, i) => {
+  entries.forEach((raw, entryIndex) => {
     const e = raw as Record<string, unknown>;
-    const label = `Certificate entry ${i + 1}`;
-    if (!isNonEmptyText(e.certName)) return warnings.push(`${label} was left out — missing a certificate name.`);
-    if (!isNonEmptyText(e.issuer)) return warnings.push(`${label} was left out — missing an issuing organization.`);
-    if (!isValidDate(e.issueDate)) return warnings.push(`${label} was left out — "${e.issueDate}" isn't a real issue date.`);
-
-    const entry: Record<string, unknown> = {
-      certName: e.certName,
-      issuer: e.issuer,
-      issueDate: e.issueDate,
+    const data: Record<string, unknown> = {};
+    let valid = true;
+    const flag = (field: string, rawValue: unknown, reason: string) => {
+      valid = false;
+      issues.push({ scope: "certificates", entryIndex, field, rawValue, reason });
+      data[field] = rawValue ?? "";
     };
-    if (e.expiryDate !== undefined && e.expiryDate !== null) {
+
+    if (isNonEmptyText(e.certName)) data.certName = e.certName;
+    else flag("certName", e.certName, "Missing a certificate name.");
+
+    if (isNonEmptyText(e.issuer)) data.issuer = e.issuer;
+    else flag("issuer", e.issuer, "Missing an issuing organization.");
+
+    if (isValidDate(e.issueDate)) data.issueDate = e.issueDate;
+    else flag("issueDate", e.issueDate, `"${e.issueDate ?? ""}" isn't a real issue date.`);
+
+    if (e.expiryDate !== undefined && e.expiryDate !== null && e.expiryDate !== "") {
       if (isValidDate(e.expiryDate)) {
-        entry.expiryDate = e.expiryDate;
+        data.expiryDate = e.expiryDate;
       } else {
-        warnings.push(`"${e.expiryDate}" for ${label}'s expiry date was left out — isn't a real date.`);
+        valid = false;
+        issues.push({ scope: "certificates", entryIndex, field: "expiryDate", rawValue: e.expiryDate, reason: "Isn't a real date." });
+        data.expiryDate = e.expiryDate;
       }
     }
     // Provenance only (which Excel-import source line this came from, if
     // any) — no shape to validate, just kept if present.
-    if (isNonEmptyText(e.rawText)) entry.rawText = e.rawText;
-    cleaned.push(entry);
+    if (isNonEmptyText(e.rawText)) data.rawText = e.rawText;
+
+    result.push({ data, valid });
   });
 
-  return { cleaned, warnings };
+  return { entries: result, issues };
 }
 
 function validateSkillEntries(entries: unknown): RelationCheck {
-  const cleaned: Record<string, unknown>[] = [];
-  const warnings: string[] = [];
-  if (!Array.isArray(entries)) return { cleaned, warnings };
+  const result: RelationEntryResult[] = [];
+  const issues: FieldIssue[] = [];
+  if (!Array.isArray(entries)) return { entries: result, issues };
 
-  entries.forEach((raw, i) => {
+  entries.forEach((raw, entryIndex) => {
     const e = raw as Record<string, unknown>;
-    const label = `Skill entry ${i + 1}`;
+    const data: Record<string, unknown> = {};
+    let valid = true;
+    const flag = (field: string, rawValue: unknown, reason: string, fallback: unknown = "") => {
+      valid = false;
+      issues.push({ scope: "skills", entryIndex, field, rawValue, reason });
+      data[field] = rawValue ?? fallback;
+    };
+
     const category = typeof e.category === "string" ? e.category.toLowerCase() : "";
-    if (category !== "technical" && category !== "language") {
-      return warnings.push(`${label} was left out — category must be "technical" or "language".`);
-    }
-    if (!isNonEmptyText(e.name)) return warnings.push(`${label} was left out — missing a skill name.`);
-    if (!isValidProficiency(e.proficiency)) {
-      return warnings.push(`${label} was left out — proficiency must be a number from 0-100.`);
+    if (category === "technical" || category === "language") {
+      data.category = category;
+    } else {
+      flag("category", e.category, 'Category must be "technical" or "language".', category || "technical");
     }
 
-    cleaned.push({ category, name: e.name, proficiency: e.proficiency });
+    if (isNonEmptyText(e.name)) data.name = e.name;
+    else flag("name", e.name, "Missing a skill name.");
+
+    if (isValidProficiency(e.proficiency)) {
+      data.proficiency = e.proficiency;
+    } else {
+      // proficiency is an Int column — fall back to 0 if the raw value
+      // isn't numeric at all (the coerced/clamped-out-of-range case, e.g.
+      // 150, is still a real number and is kept as-is for review).
+      flag(
+        "proficiency",
+        e.proficiency,
+        "Proficiency must be a number from 0-100.",
+        coerceRequiredNumber(e.proficiency, 0, true)
+      );
+    }
+
+    result.push({ data, valid });
   });
 
-  return { cleaned, warnings };
+  return { entries: result, issues };
 }
 
 function validatePerformanceReviewEntries(entries: unknown): RelationCheck {
-  const cleaned: Record<string, unknown>[] = [];
-  const warnings: string[] = [];
-  if (!Array.isArray(entries)) return { cleaned, warnings };
+  const result: RelationEntryResult[] = [];
+  const issues: FieldIssue[] = [];
+  if (!Array.isArray(entries)) return { entries: result, issues };
 
-  entries.forEach((raw, i) => {
+  entries.forEach((raw, entryIndex) => {
     const e = raw as Record<string, unknown>;
-    const label = `Performance review entry ${i + 1}`;
+    const data: Record<string, unknown> = {};
+    let valid = true;
+
     const quarter = typeof e.quarter === "string" ? e.quarter.trim().toUpperCase() : "";
-    if (!REVIEW_QUARTERS.includes(quarter)) {
-      return warnings.push(`${label} was left out — quarter must be Q1, Q2, Q3, or Q4.`);
+    if (REVIEW_QUARTERS.includes(quarter)) {
+      data.quarter = quarter;
+    } else {
+      valid = false;
+      issues.push({ scope: "performanceReviews", entryIndex, field: "quarter", rawValue: e.quarter, reason: "Must be Q1, Q2, Q3, or Q4." });
+      data.quarter = quarter || "Q1";
     }
-    if (!isPlausibleGraduationYear(e.year)) {
-      return warnings.push(`${label} was left out — "${e.year}" isn't a plausible year.`);
+
+    if (isPlausibleGraduationYear(e.year)) {
+      data.year = e.year;
+    } else {
+      valid = false;
+      issues.push({ scope: "performanceReviews", entryIndex, field: "year", rawValue: e.year, reason: `"${e.year ?? ""}" isn't a plausible year.` });
+      data.year = coerceRequiredNumber(e.year, CURRENT_YEAR, true);
     }
-    // This is the fraction (0-1) EmployeeForm already converted the
-    // admin-entered percentage into — see the RELATION_FIELDS comment.
-    if (typeof e.score !== "number" || e.score < 0 || e.score > 1) {
-      return warnings.push(`${label} was left out — score must be a percentage from 0 to 100.`);
+
+    // This is the fraction (0-1) EmployeeForm/the batch template already
+    // converted the admin-entered percentage into — see the RELATION_FIELDS
+    // comment above.
+    if (typeof e.score === "number" && e.score >= 0 && e.score <= 1) {
+      data.score = e.score;
+    } else {
+      valid = false;
+      // e.score has already been converted from percentage to fraction by
+      // the batch parser (see the comment above) — convert back so the
+      // flagged/displayed value matches what the admin actually typed and
+      // the percentage-phrased reason above.
+      issues.push({
+        scope: "performanceReviews",
+        entryIndex,
+        field: "score",
+        rawValue: typeof e.score === "number" ? e.score * 100 : e.score,
+        reason: "Score must be a percentage from 0 to 100.",
+      });
+      data.score = coerceRequiredNumber(e.score, 0, false);
     }
-    cleaned.push({ quarter, year: e.year, score: e.score });
+
+    result.push({ data, valid });
   });
 
-  return { cleaned, warnings };
+  return { entries: result, issues };
 }
 
 const RELATION_VALIDATORS: Record<string, (entries: unknown) => RelationCheck> = {
@@ -576,6 +698,30 @@ const RELATION_VALIDATORS: Record<string, (entries: unknown) => RelationCheck> =
   skills: validateSkillEntries,
   performanceReviews: validatePerformanceReviewEntries,
 };
+
+// Turns structured issues back into the prose warnings the chatbot's
+// free-form flow shows in chat, phrased as a DROP (that flow still discards
+// an invalid entry entirely, unlike the batch flow below, since a live
+// chatbot conversation can just ask again rather than needing a persisted
+// review queue).
+function issuesToDropWarnings(relationKey: RelationKey, entries: RelationEntryResult[], issues: FieldIssue[]): string[] {
+  const byEntry = new Map<number, FieldIssue[]>();
+  issues.forEach((issue) => {
+    if (issue.entryIndex === undefined) return;
+    const list = byEntry.get(issue.entryIndex) ?? [];
+    list.push(issue);
+    byEntry.set(issue.entryIndex, list);
+  });
+  const label = relationKey === "performanceReviews" ? "Performance review" : relationKey[0].toUpperCase() + relationKey.slice(1, -1);
+  const warnings: string[] = [];
+  entries.forEach((entry, i) => {
+    if (entry.valid) return;
+    const entryIssues = byEntry.get(i) ?? [];
+    const first = entryIssues[0];
+    warnings.push(`${label} entry ${i + 1} was left out — ${first ? first.reason : "one of its fields wasn't valid."}`);
+  });
+  return warnings;
+}
 
 // Used for bulk messages (updates, full freeform pastes) — validates
 // every field actually present, dropping anything that fails its own
@@ -608,60 +754,85 @@ export function validateExtractedFields(data: Record<string, unknown>) {
 
   for (const [field, validate] of Object.entries(RELATION_VALIDATORS)) {
     if (!(field in data)) continue;
-    const { cleaned: cleanedEntries, warnings: relationWarnings } = validate(data[field]);
-    cleaned[field] = cleanedEntries;
-    warnings.push(...relationWarnings);
+    const { entries, issues } = validate(data[field]);
+    // Unlike the batch flow below, the chatbot still drops an invalid entry
+    // entirely rather than keeping a flagged raw value — a live
+    // conversation can just ask again, so there's no need for a persisted
+    // review queue here.
+    cleaned[field] = entries.filter((e) => e.valid).map((e) => e.data);
+    warnings.push(...issuesToDropWarnings(field as RelationKey, entries, issues));
   }
 
   return { cleaned, warnings };
 }
 
-// Validates one row of the batch (tabular) import — scalar fields drive
-// `errors`/`valid` (a bad scalar makes the whole row unselectable, shown in
-// the review table). Unlike validateExtractedFields (prose warnings, no
-// per-field map), this returns a STRUCTURED per-field error map so the
-// review table can flag exactly which cell is wrong. fullName is required
-// (it's the one NOT NULL Employee column).
-//
-// Relation entries (data.experience, data.education, etc. — reconstructed
-// by batchParser from the numbered slot columns) are validated separately
-// via the SAME per-relation validators the chatbot/single-import flows use:
-// a bad individual entry just drops that one entry (with a warning), it
-// does NOT invalidate the whole row the way a bad scalar field does.
-export function validateBatchRow(data: Record<string, unknown>): {
-  cleaned: Record<string, unknown>;
-  errors: Record<string, string>;
-  valid: boolean;
-  relationWarnings: string[];
-} {
-  const cleaned: Record<string, unknown> = {};
-  const errors: Record<string, string> = {};
+export interface BatchRowResolution {
+  // Writable as-is: valid fields hold their normalized value; an invalid
+  // one is simply left out (every Employee scalar except fullName is
+  // nullable), and flagged via `issues` instead of blocking the row.
+  employeeData: Record<string, unknown>;
+  // Writable as-is per relation: every entry is kept (never dropped) —
+  // invalid required fields hold their raw value, or for the few numeric
+  // columns where a non-numeric raw value genuinely can't be written, a
+  // best-effort coercion. See the relation validators above.
+  relationData: Partial<Record<RelationKey, Record<string, unknown>[]>>;
+  // Every field the validator couldn't confidently accept, across scalars
+  // and relation entries. The review table uses this to offer an inline
+  // fix; whatever's still here at commit time becomes a ReviewFlag instead
+  // of blocking the row or losing the value.
+  issues: FieldIssue[];
+}
+
+// Resolves one row of the batch (tabular) import. Nothing here blocks a row
+// from being imported — SQLite enforces column TYPE, not format, so an
+// invalid value can always be written as-is (or, for fullName, the one
+// NOT NULL column, kept raw unless genuinely missing) and flagged for the
+// admin to fix later from the Dashboard, rather than losing the row or the
+// value. Called at both preview time (to show the review table what would
+// happen) and commit time (to actually build what gets written).
+export function validateBatchRow(data: Record<string, unknown>): BatchRowResolution {
+  const employeeData: Record<string, unknown> = {};
+  const issues: FieldIssue[] = [];
 
   for (const [field, rawValue] of Object.entries(data)) {
     if (field in RELATION_VALIDATORS) continue; // handled below, not a scalar
+    if (field === "fullName") continue; // handled separately below
     if (rawValue === null || rawValue === undefined || rawValue === "") continue;
     const stringValue = String(rawValue).trim();
     if (stringValue.length === 0) continue;
 
     const result = validateFieldValue(field, stringValue);
     if (!result.valid) {
-      errors[field] = result.reason ?? "Invalid value.";
+      issues.push({ scope: "employee", field, rawValue: stringValue, reason: result.reason ?? "Invalid value." });
       continue;
     }
-    cleaned[field] = NUMERIC_SCALAR_FIELDS.has(field)
+    employeeData[field] = NUMERIC_SCALAR_FIELDS.has(field)
       ? Number(stringValue)
       : result.normalized ?? stringValue;
   }
 
-  if (!cleaned.fullName) errors.fullName = "Full name is required.";
-
-  const relationWarnings: string[] = [];
-  for (const [field, validate] of Object.entries(RELATION_VALIDATORS)) {
-    if (!(field in data)) continue;
-    const { cleaned: cleanedEntries, warnings } = validate(data[field]);
-    if (cleanedEntries.length > 0) cleaned[field] = cleanedEntries;
-    relationWarnings.push(...warnings);
+  // fullName is the one NOT NULL Employee column, but it's still a plain
+  // TEXT column with no format constraint — a value that fails the shape
+  // check (contains numbers, no space, etc.) is still safe to write as-is.
+  // Only a genuinely missing name needs a placeholder.
+  const rawFullName = data.fullName;
+  const fullNameResult =
+    typeof rawFullName === "string" ? validateFieldValue("fullName", rawFullName) : { valid: false, reason: "Full name is required." };
+  if (fullNameResult.valid) {
+    employeeData.fullName = fullNameResult.normalized ?? (rawFullName as string).trim();
+  } else {
+    const trimmed = typeof rawFullName === "string" ? rawFullName.trim() : "";
+    employeeData.fullName = trimmed.length > 0 ? trimmed : "(Unnamed — needs review)";
+    issues.push({ scope: "employee", field: "fullName", rawValue: rawFullName, reason: fullNameResult.reason ?? "Full name is required." });
   }
 
-  return { cleaned, errors, valid: Object.keys(errors).length === 0, relationWarnings };
+  const relationData: Partial<Record<RelationKey, Record<string, unknown>[]>> = {};
+  for (const [field, validate] of Object.entries(RELATION_VALIDATORS)) {
+    if (!(field in data)) continue;
+    const { entries, issues: relationIssues } = validate(data[field]);
+    if (entries.length > 0) relationData[field as RelationKey] = entries.map((e) => e.data);
+    issues.push(...relationIssues);
+  }
+
+  return { employeeData, relationData, issues };
 }

@@ -8,6 +8,7 @@
 // this component as props; this file does zero data-fetching or math.
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import {
     BarChart,
     Bar,
@@ -25,7 +26,9 @@ import type {
     RecordStatusBreakdown,
     CompletionBucket,
     AttentionEmployee,
+    FlaggedField,
 } from "@/lib/employeeStats";
+import { useAuth } from "@/context/AuthContext";
 
 const COLORS = {
     red: "#DC2626",
@@ -642,6 +645,91 @@ function TabOverviewList({
     );
 }
 
+// Turns a ReviewFlag's field ("email", or "experience[0].startDate") into
+// something readable — see the model comment in prisma/schema.prisma for
+// the format.
+function humanizeReviewField(field: string): string {
+    const spacer = (s: string) =>
+        s
+            .replace(/([a-z])([A-Z])/g, "$1 $2")
+            .replace(/^./, (c) => c.toUpperCase())
+            // "nationalId" -> "National Id" otherwise — schema camelCases
+            // only the leading letter of "Id", unlike "companyID".
+            .replace(/\bId\b/, "ID");
+    const match = field.match(/^(\w+)\[(\d+)\]\.(\w+)$/);
+    if (!match) return spacer(field);
+    const [, relation, index, subField] = match;
+    const relationLabel =
+        relation === "performanceReviews" ? "Performance review" : spacer(relation).replace(/s$/, "");
+    return `${relationLabel} ${Number(index) + 1} — ${spacer(subField)}`;
+}
+
+// The batch importer never drops an invalid value — it writes it as-is and
+// records why here, so admins fix real records instead of losing them.
+function FlaggedFieldsList({ flags }: { flags: FlaggedField[] }) {
+    const { authFetch } = useAuth();
+    const router = useRouter();
+    const [resolvingId, setResolvingId] = useState<number | null>(null);
+
+    const resolve = async (id: number) => {
+        setResolvingId(id);
+        try {
+            const res = await authFetch(`/api/review-flags/${id}`, { method: "PATCH" });
+            if (res.ok) router.refresh();
+        } finally {
+            setResolvingId(null);
+        }
+    };
+
+    if (flags.length === 0) {
+        return (
+            <p className="text-sm" style={{ color: COLORS.gray }}>
+                No validation flags right now — nothing the batch importer had
+                to guess at.
+            </p>
+        );
+    }
+
+    return (
+        <div>
+            {flags.map((flag) => (
+                <div
+                    key={flag.id}
+                    className="flex items-center gap-3 py-2.5 border-b last:border-b-0"
+                    style={{ borderColor: "#F3F4F6" }}
+                >
+                    <div className="flex-1 min-w-0">
+                        <p className="text-sm" style={{ color: COLORS.black }}>
+                            {flag.employeeName}{" "}
+                            <span style={{ color: COLORS.gray }}>
+                                · {humanizeReviewField(flag.field)}
+                            </span>
+                        </p>
+                        <p className="text-xs" style={{ color: "#B45309" }}>
+                            {flag.reason} — currently &quot;{flag.rawValue}&quot;
+                        </p>
+                    </div>
+                    <a
+                        href={`/app/records?highlight=${flag.employeeId}`}
+                        className="text-xs font-medium shrink-0 underline underline-offset-2"
+                        style={{ color: COLORS.red }}
+                    >
+                        View record
+                    </a>
+                    <button
+                        onClick={() => resolve(flag.id)}
+                        disabled={resolvingId === flag.id}
+                        className="text-xs font-medium px-3 py-1.5 rounded-lg border hover:bg-gray-50 disabled:opacity-50 shrink-0"
+                        style={{ borderColor: COLORS.border, color: COLORS.black }}
+                    >
+                        {resolvingId === flag.id ? "…" : "Mark reviewed"}
+                    </button>
+                </div>
+            ))}
+        </div>
+    );
+}
+
 export default function DashboardView({ data }: { data: DashboardData }) {
     const [expandedTab, setExpandedTab] = useState(() =>
         getDefaultTab(data.tabOverview),
@@ -747,10 +835,7 @@ export default function DashboardView({ data }: { data: DashboardData }) {
                 title="Flagged for review"
                 subtitle="Fields the validator couldn't confidently accept or reject"
             >
-                <p className="text-sm" style={{ color: COLORS.gray }}>
-                    No validation flags yet — this fills in once the chatbot
-                    begins reviewing entries.
-                </p>
+                <FlaggedFieldsList flags={data.flaggedFields} />
             </SectionCard>
         </div>
     );

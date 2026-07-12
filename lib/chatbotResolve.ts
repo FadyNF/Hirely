@@ -16,13 +16,16 @@ export interface EmployeeMatch {
 }
 
 async function searchByName(name: string): Promise<EmployeeMatch[]> {
-  // SQLite doesn't support case-insensitive equality the way Postgres
+  // SQLite doesn't support case-insensitive matching the way Postgres
   // does, so we compare in plain JavaScript — fine at this scale.
+  // Substring match (not exact equality) so a first name or partial
+  // name — e.g. "wael" — matches "Wael Dawoud Bakry"; multiple hits
+  // are surfaced through the existing disambiguate path, not lost.
   const all = await prisma.employee.findMany({
     select: { id: true, fullName: true, email: true, nationalId: true },
   });
   const target = name.trim().toLowerCase();
-  return all.filter((e) => e.fullName.trim().toLowerCase() === target);
+  return all.filter((e) => e.fullName.trim().toLowerCase().includes(target));
 }
 
 async function findMatches(extracted: ExtractedEmployeeData): Promise<EmployeeMatch[]> {
