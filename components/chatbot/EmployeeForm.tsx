@@ -17,7 +17,7 @@
 import { useState } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPlus, faXmark, faTrashCan, faSpinner } from '@fortawesome/free-solid-svg-icons';
-import { BASIC_INFO_FIELDS, BASIC_INFO_LABELS } from '@/lib/tabConfig';
+import { BASIC_INFO_FIELDS, BASIC_INFO_LABELS, OPTIONAL_INFO_FIELDS, OPTIONAL_INFO_LABELS } from '@/lib/tabConfig';
 import {
   validateFieldValue,
   validateRelationField,
@@ -25,6 +25,7 @@ import {
   ENUM_OPTIONS,
   GPA_SCALES,
   RELATION_FIELDS,
+  NUMERIC_SCALAR_FIELDS,
   type RelationKey,
   type GpaScale,
 } from '@/lib/chatbotValidate';
@@ -44,7 +45,7 @@ const COLORS = {
 // Field presentation config
 // ---------------------------------------------------------------------------
 
-type BasicInputType = 'text' | 'email' | 'date' | 'tel' | 'select';
+type BasicInputType = 'text' | 'email' | 'date' | 'tel' | 'select' | 'number';
 
 // How each basic-info field renders. Keys/labels come from tabConfig; only
 // the input TYPE (and enum source) is new here. Proper input types prevent
@@ -64,6 +65,19 @@ const BASIC_INPUT: Record<string, { type: BasicInputType; placeholder?: string; 
   gender: { type: 'select', enumKey: 'gender' },
   nationalId: { type: 'text', placeholder: '14 digits' },
   militaryStatus: { type: 'select', enumKey: 'militaryStatus' },
+};
+
+// "Additional Info" — all optional, unlike BASIC_INPUT above. Nothing in a
+// plain chatbot conversation produces these; they exist for import sources
+// (Excel) that supply more than the 10 required fields.
+const OPTIONAL_INPUT: Record<string, { type: BasicInputType; placeholder?: string }> = {
+  companyID: { type: 'text', placeholder: 'e.g. 704' },
+  hiringDate: { type: 'date' },
+  position: { type: 'text', placeholder: 'e.g. AI Engineer' },
+  age: { type: 'number', placeholder: 'e.g. 21' },
+  yearsExpPrev: { type: 'number', placeholder: 'e.g. 1' },
+  yearsExpElsewedy: { type: 'number', placeholder: 'e.g. 2' },
+  totalExperience: { type: 'number', placeholder: 'e.g. 3' },
 };
 
 type RelFieldType = 'text' | 'date' | 'endDate' | 'number' | 'textarea' | 'select' | 'gpa';
@@ -115,6 +129,10 @@ const RELATION_UI: Record<RelationKey, { label: string; singular: string; fields
       { key: 'issuer', label: 'Issuing Organization', type: 'text' },
       { key: 'issueDate', label: 'Issue Date', type: 'date' },
       { key: 'expiryDate', label: 'Expiry Date', type: 'date', placeholder: 'Optional' },
+      // Only ever populated via Excel import — the original source line,
+      // kept visible so the admin can double-check what Gemini parsed
+      // this entry from.
+      { key: 'rawText', label: 'Original Source Text', type: 'textarea', placeholder: 'Optional' },
     ],
   },
   skills: {
@@ -126,12 +144,24 @@ const RELATION_UI: Record<RelationKey, { label: string; singular: string; fields
       { key: 'proficiency', label: 'Proficiency (0-100)', type: 'number', placeholder: '0-100' },
     ],
   },
+  performanceReviews: {
+    label: 'Performance Reviews',
+    singular: 'review',
+    fields: [
+      { key: 'quarter', label: 'Quarter', type: 'select', enumOptions: ['Q1', 'Q2', 'Q3', 'Q4'] },
+      { key: 'year', label: 'Year', type: 'number', placeholder: 'e.g. 2023' },
+      // Entered as a percentage (0-100) for readability — converted to the
+      // 0-1 fraction PerformanceReview.score actually stores right before
+      // submit, in buildData below.
+      { key: 'score', label: 'Score (%)', type: 'number', placeholder: '0-100' },
+    ],
+  },
 };
 
-const RELATION_ORDER: RelationKey[] = ['experience', 'education', 'certificates', 'skills'];
+const RELATION_ORDER: RelationKey[] = ['experience', 'education', 'certificates', 'skills', 'performanceReviews'];
 // gpa is deliberately excluded — it's a compound (value + scale) field
 // handled separately (see the 'gpa' branches below), not a plain number.
-const NUMERIC_RELATION_FIELDS = new Set(['graduationYear', 'proficiency']);
+const NUMERIC_RELATION_FIELDS = new Set(['graduationYear', 'proficiency', 'year', 'score']);
 
 // ---------------------------------------------------------------------------
 // Types
@@ -145,6 +175,7 @@ interface FormState {
   education: RelationEntry[];
   certificates: RelationEntry[];
   skills: RelationEntry[];
+  performanceReviews: RelationEntry[];
 }
 
 // What onSubmit receives — scalars as strings (the commit route drops empty
@@ -155,6 +186,7 @@ export interface BuiltEmployeeData {
   education: Record<string, unknown>[];
   certificates: Record<string, unknown>[];
   skills: Record<string, unknown>[];
+  performanceReviews: Record<string, unknown>[];
 }
 
 // onSubmit resolves to a result: ok, or an error to surface — either a
@@ -170,6 +202,10 @@ interface EmployeeFormProps {
   initialData?: Partial<Record<string, unknown>>;
   onSubmit: (data: BuiltEmployeeData) => Promise<SubmitResult>;
   onClose: () => void;
+  // e.g. "Reviewing 2 of 3" — shown next to the title when this form is
+  // one of a queue (Excel multi-file import). Omitted for a normal
+  // single create.
+  progressLabel?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -190,7 +226,7 @@ function emptyEntry(relationKey: RelationKey): RelationEntry {
 // all-strings form state.
 function buildInitialState(initial?: Partial<Record<string, unknown>>): FormState {
   const basic: Record<string, string> = {};
-  for (const f of BASIC_INFO_FIELDS) {
+  for (const f of [...BASIC_INFO_FIELDS, ...OPTIONAL_INFO_FIELDS]) {
     const v = initial?.[f];
     basic[f] = v === undefined || v === null ? '' : String(v);
   }
@@ -213,6 +249,7 @@ function buildInitialState(initial?: Partial<Record<string, unknown>>): FormStat
     education: readRelation('education'),
     certificates: readRelation('certificates'),
     skills: readRelation('skills'),
+    performanceReviews: readRelation('performanceReviews'),
   };
 }
 
@@ -228,7 +265,7 @@ function coerceRelationValue(field: string, raw: string): string | number {
 // Component
 // ---------------------------------------------------------------------------
 
-export default function EmployeeForm({ initialData, onSubmit, onClose }: EmployeeFormProps) {
+export default function EmployeeForm({ initialData, onSubmit, onClose, progressLabel }: EmployeeFormProps) {
   const [form, setForm] = useState<FormState>(() => buildInitialState(initialData));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [generalError, setGeneralError] = useState('');
@@ -251,8 +288,20 @@ export default function EmployeeForm({ initialData, onSubmit, onClose }: Employe
   const addEntry = (rk: RelationKey) =>
     setForm((prev) => ({ ...prev, [rk]: [...prev[rk], emptyEntry(rk)] }));
 
-  const removeEntry = (rk: RelationKey, index: number) =>
+  const removeEntry = (rk: RelationKey, index: number) => {
     setForm((prev) => ({ ...prev, [rk]: prev[rk].filter((_, i) => i !== index) }));
+    // Error keys are index-based ("experience.2.jobTitle") — removing an
+    // entry shifts every later index down, so a stale error would
+    // otherwise reattach to whatever entry now occupies that slot. Clear
+    // every error for this relation; the next submit re-validates cleanly.
+    setErrors((prevErrors) => {
+      const next = { ...prevErrors };
+      for (const key of Object.keys(next)) {
+        if (key.startsWith(`${rk}.`)) delete next[key];
+      }
+      return next;
+    });
+  };
 
   // ---- Validation (mirrors the server's rules) ----
   function validateAll(): Record<string, string> {
@@ -265,6 +314,14 @@ export default function EmployeeForm({ initialData, onSubmit, onClose }: Employe
         next[field] = 'This field is required.';
         continue;
       }
+      const result = validateFieldValue(field, value);
+      if (!result.valid) next[field] = result.reason ?? 'Invalid value.';
+    }
+
+    // Additional Info — all optional; only validated when actually filled in.
+    for (const field of OPTIONAL_INFO_FIELDS) {
+      const value = (form.basic[field] ?? '').trim();
+      if (!value) continue;
       const result = validateFieldValue(field, value);
       if (!result.valid) next[field] = result.reason ?? 'Invalid value.';
     }
@@ -314,8 +371,18 @@ export default function EmployeeForm({ initialData, onSubmit, onClose }: Employe
   }
 
   function buildData(): BuiltEmployeeData {
-    const data: BuiltEmployeeData = { experience: [], education: [], certificates: [], skills: [] };
+    const data: BuiltEmployeeData = { experience: [], education: [], certificates: [], skills: [], performanceReviews: [] };
     for (const field of BASIC_INFO_FIELDS) data[field] = (form.basic[field] ?? '').trim();
+
+    // Optional fields — only included when actually filled in (an empty
+    // optional field is a valid "not provided", not an empty-string value
+    // sent to the server). Numeric ones are coerced to real numbers here,
+    // same as relation numeric sub-fields, since these are Int? columns.
+    for (const field of OPTIONAL_INFO_FIELDS) {
+      const raw = (form.basic[field] ?? '').trim();
+      if (raw === '') continue;
+      data[field] = NUMERIC_SCALAR_FIELDS.has(field) ? Number(raw) : raw;
+    }
 
     const buildEntries = (rk: RelationKey) =>
       form[rk].map((entry) => {
@@ -335,6 +402,11 @@ export default function EmployeeForm({ initialData, onSubmit, onClose }: Employe
             if (result.valid) out.gpa = result.normalized;
           }
         }
+        // Admin enters a percentage (0-100); PerformanceReview.score stores
+        // the 0-1 fraction — converted here, right before it leaves the form.
+        if (rk === 'performanceReviews' && typeof out.score === 'number') {
+          out.score = out.score / 100;
+        }
         return out;
       });
 
@@ -342,6 +414,7 @@ export default function EmployeeForm({ initialData, onSubmit, onClose }: Employe
     data.education = buildEntries('education');
     data.certificates = buildEntries('certificates');
     data.skills = buildEntries('skills');
+    data.performanceReviews = buildEntries('performanceReviews');
     return data;
   }
 
@@ -413,6 +486,28 @@ export default function EmployeeForm({ initialData, onSubmit, onClose }: Employe
             style={inputStyle(!!err)}
           />
         )}
+        <ErrorText msg={err} />
+      </div>
+    );
+  }
+
+  function renderOptionalField(field: string) {
+    const cfg = OPTIONAL_INPUT[field];
+    const err = errors[field];
+    const label = OPTIONAL_INFO_LABELS[field] ?? field;
+    return (
+      <div key={field}>
+        <label className="block text-xs font-medium mb-1" style={{ color: COLORS.gray }}>
+          {label}
+        </label>
+        <input
+          type={cfg.type}
+          value={form.basic[field] ?? ''}
+          placeholder={cfg.placeholder}
+          onChange={(e) => setBasic(field, e.target.value)}
+          className={inputClass(!!err)}
+          style={inputStyle(!!err)}
+        />
         <ErrorText msg={err} />
       </div>
     );
@@ -595,7 +690,17 @@ export default function EmployeeForm({ initialData, onSubmit, onClose }: Employe
         {/* Header */}
         <div className="px-6 py-4 border-b flex items-center justify-between shrink-0" style={{ borderColor: COLORS.border }}>
           <div>
-            <h2 className="text-lg font-semibold" style={{ color: COLORS.black }}>Add a new employee</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-semibold" style={{ color: COLORS.black }}>Add a new employee</h2>
+              {progressLabel && (
+                <span
+                  className="text-[11px] font-medium px-2 py-0.5 rounded-full"
+                  style={{ backgroundColor: COLORS.errorBg, color: COLORS.red }}
+                >
+                  {progressLabel}
+                </span>
+              )}
+            </div>
             <p className="text-xs" style={{ color: COLORS.gray }}>All basic-info fields are required.</p>
           </div>
           <button
@@ -623,6 +728,14 @@ export default function EmployeeForm({ initialData, onSubmit, onClose }: Employe
             <h3 className="text-sm font-semibold mb-3" style={{ color: COLORS.black }}>Basic Information</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {BASIC_INFO_FIELDS.map((field) => renderBasicField(field))}
+            </div>
+          </div>
+
+          <div>
+            <h3 className="text-sm font-semibold mb-1" style={{ color: COLORS.black }}>Additional Info</h3>
+            <p className="text-xs mb-3" style={{ color: COLORS.gray }}>Optional — typically only filled in via Excel import.</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {OPTIONAL_INFO_FIELDS.map((field) => renderOptionalField(field))}
             </div>
           </div>
 

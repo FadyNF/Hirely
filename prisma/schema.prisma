@@ -14,17 +14,17 @@ datasource db {
 
 // A person who logs into the Foundry admin tool.
 model User {
-  id                Int       @id @default(autoincrement())
-  email             String    @unique
-  passwordHash      String
+  id           Int    @id @default(autoincrement())
+  email        String @unique
+  passwordHash String
 
-  emailVerified     Boolean   @default(false)
-  verificationCode  String?
-  codeExpiresAt     DateTime?
+  emailVerified    Boolean   @default(false)
+  verificationCode String?
+  codeExpiresAt    DateTime?
 
-  refreshTokenHash  String?
+  refreshTokenHash String?
 
-  createdAt         DateTime  @default(now())
+  createdAt DateTime @default(now())
 }
 
 // ============================================================
@@ -33,35 +33,52 @@ model User {
 // ============================================================
 
 model Employee {
-  id              Int      @id @default(autoincrement())
-  fullName        String
-  phone           String?
-  birthDate       String?
-  nationality     String?
-  maritalStatus   String?
-  email           String?
-  workLocation    String?
-  gender          String?
+  id               Int      @id @default(autoincrement())
+  fullName         String
+  phone            String?
+  birthDate        String?
+  nationality      String?
+  maritalStatus    String?
+  email            String?
+  workLocation     String?
+  gender           String?
   // Unique so no two employees can share a national ID. Nullable-unique:
   // SQLite allows many NULLs in a unique column, so employees genuinely
   // without an ID on file still coexist — only real, populated values
   // must be distinct.
-  nationalId      String?  @unique
-  militaryStatus  String?
-  createdAt       DateTime @default(now())
+  nationalId       String?  @unique
+  militaryStatus   String?
+  // Company-issued personnel/badge number — distinct from nationalId
+  // (government ID). Same nullable-unique pattern.
+  companyID        String?  @unique
+  hiringDate       String?
+  position         String?
+  // Stored directly rather than derived from birthDate: some import
+  // sources (e.g. the Excel talent-profile template) give age without
+  // a birth date, and age alone can't be reversed into one.
+  age              Int?
+  // Tenure summary numbers from the same Excel template. Redundant with
+  // what could be derived from hiringDate + Experience entries, but the
+  // source data gives them as precomputed values, so they're stored
+  // as-is rather than recomputed.
+  yearsExpPrev     Int?
+  yearsExpElsewedy Int?
+  totalExperience  Int?
+  createdAt        DateTime @default(now())
 
-  // These four are the "one employee, many entries" relationships —
+  // These five are the "one employee, many entries" relationships —
   // Prisma calls this a one-to-many relation. Each array field here
   // doesn't store data itself; it just tells Prisma "look these up
   // from the child table whenever asked."
-  experience   Experience[]
-  education    Education[]
-  certificates Certificate[]
-  skills       Skill[]
+  experience         Experience[]
+  education          Education[]
+  certificates       Certificate[]
+  skills             Skill[]
+  performanceReviews PerformanceReview[]
 }
 
 model Experience {
-  id          Int      @id @default(autoincrement())
+  id          Int     @id @default(autoincrement())
   jobTitle    String
   company     String
   startDate   String
@@ -77,37 +94,56 @@ model Experience {
 }
 
 model Education {
-  id              Int      @id @default(autoincrement())
-  degree          String
-  fieldOfStudy    String
-  institution     String
-  graduationYear  Int
+  id             Int     @id @default(autoincrement())
+  degree         String
+  fieldOfStudy   String
+  institution    String
+  graduationYear Int
   // Text, not a number — stores the scale alongside the value (e.g.
   // "2.5/4.0 (American)"), since a bare "1.3" is genuinely ambiguous
   // between an excellent German grade and a nearly-failing American one.
   // Still optional — excluded from health scoring, as decided.
-  gpa             String?
+  gpa            String?
 
   employeeId Int
   employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 }
 
 model Certificate {
-  id          Int      @id @default(autoincrement())
-  certName    String
-  issuer      String
-  issueDate   String
-  expiryDate  String?  // optional — excluded from health scoring, as decided
+  id         Int     @id @default(autoincrement())
+  certName   String
+  issuer     String
+  issueDate  String
+  expiryDate String? // optional — excluded from health scoring, as decided
+  // Original unparsed source line, kept only for entries created via
+  // Excel import (e.g. the Training Historical Record freetext lists)
+  // so the admin can see what Gemini parsed the row from. Null for
+  // certificates entered any other way.
+  rawText    String?
 
   employeeId Int
   employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 }
 
 model Skill {
-  id           Int    @id @default(autoincrement())
-  category     String // "technical" or "language"
-  name         String
-  proficiency  Int
+  id          Int    @id @default(autoincrement())
+  category    String // "technical" or "language"
+  name        String
+  proficiency Int
+
+  employeeId Int
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+}
+
+// One row per quarter of appraisal score, parsed from the Excel
+// talent-profile template's "Performance appraisal history (%)" block.
+// Attendance Behavior from the same template is intentionally not
+// modeled yet — deferred per product decision.
+model PerformanceReview {
+  id      Int    @id @default(autoincrement())
+  quarter String // e.g. "Q1"
+  year    Int
+  score   Float // stored as a fraction, e.g. 0.95 for 95%
 
   employeeId Int
   employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)

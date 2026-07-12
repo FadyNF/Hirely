@@ -26,6 +26,26 @@ export const BASIC_INFO_LABELS: Record<string, string> = {
 // asked in.
 export const CREATE_REQUIRED_FIELDS = [...BASIC_INFO_FIELDS];
 
+// Extra Employee fields with no home in a plain chatbot conversation — an
+// admin typing free text has no natural reason to know a "company ID" or
+// "hiring date". Shown in EmployeeForm as an optional second section,
+// populated only when a source (currently: Excel import) actually
+// supplies them. NOT part of CREATE_REQUIRED_FIELDS.
+export const OPTIONAL_INFO_FIELDS = [
+  "companyID", "hiringDate", "position", "age",
+  "yearsExpPrev", "yearsExpElsewedy", "totalExperience",
+] as const;
+
+export const OPTIONAL_INFO_LABELS: Record<string, string> = {
+  companyID: "Company ID",
+  hiringDate: "Hiring Date",
+  position: "Position",
+  age: "Age",
+  yearsExpPrev: "Years of Experience (Prior)",
+  yearsExpElsewedy: "Years of Experience (Elsewedy)",
+  totalExperience: "Total Experience (Years)",
+};
+
 export interface MultiTabConfig {
   key: "experience" | "education" | "certificates";
   label: string;

@@ -202,10 +202,41 @@ export function validateFieldValue(field: string, rawValue: string): FieldValida
       }
       return { valid: true };
 
+    case "hiringDate": {
+      const result = validateDateString(value);
+      if (!result.valid) {
+        return {
+          valid: false,
+          reason: "Must be a real date — either YYYY-MM-DD or written out, e.g. \"June 7, 2000\".",
+        };
+      }
+      // Unlike birthDate, a future hiring date is plausible (an already-
+      // agreed future start date) — no future-date restriction here.
+      return result;
+    }
+
+    case "age":
+    case "yearsExpPrev":
+    case "yearsExpElsewedy":
+    case "totalExperience":
+      if (!/^\d+$/.test(value)) {
+        return { valid: false, reason: "Must be a whole number, zero or greater." };
+      }
+      return { valid: true };
+
     default:
       return { valid: true };
   }
 }
+
+// Optional scalar Employee fields that are stored as Int in the schema
+// (see OPTIONAL_INFO_FIELDS in lib/tabConfig.ts) — validateExtractedFields
+// below coerces these back to real numbers after validation succeeds,
+// since Prisma needs an actual number for an Int column, not a numeric
+// string.
+export const NUMERIC_SCALAR_FIELDS = new Set([
+  "age", "yearsExpPrev", "yearsExpElsewedy", "totalExperience",
+]);
 
 // ---------------------------------------------------------------------------
 // Relation-array validation (experience / education / certificates / skills)
@@ -243,9 +274,13 @@ function validateEndDate(v: unknown): FieldValidation {
 }
 
 const CURRENT_YEAR = new Date().getFullYear();
+// Named for its original use (graduationYear) but genuinely generic — any
+// plausible calendar year, reused below for performance-review years too.
 function isPlausibleGraduationYear(v: unknown): boolean {
   return typeof v === "number" && Number.isInteger(v) && v >= 1950 && v <= CURRENT_YEAR + 1;
 }
+
+const REVIEW_QUARTERS = ["Q1", "Q2", "Q3", "Q4"];
 
 // GPA is stored as TEXT now ("2.5/4.0 (American)"), not a bare number —
 // a plain "1.3" is genuinely ambiguous between an excellent German grade
@@ -293,8 +328,15 @@ function isValidProficiency(v: unknown): boolean {
 export const RELATION_FIELDS = {
   experience: { required: ["jobTitle", "company", "startDate", "endDate"], optional: ["description"] },
   education: { required: ["degree", "fieldOfStudy", "institution", "graduationYear"], optional: ["gpa"] },
-  certificates: { required: ["certName", "issuer", "issueDate"], optional: ["expiryDate"] },
+  certificates: { required: ["certName", "issuer", "issueDate"], optional: ["expiryDate", "rawText"] },
   skills: { required: ["category", "name", "proficiency"], optional: [] },
+  // score here is a PERCENTAGE (0-100) — that's the unit the admin actually
+  // types into the form. It gets divided by 100 into the fraction the
+  // PerformanceReview.score column stores right before submit (see
+  // EmployeeForm's buildData), which is why this live/inline check and the
+  // server-side entry validator below use different ranges for the same
+  // field name: this one runs BEFORE that conversion, the server one after.
+  performanceReviews: { required: ["quarter", "year", "score"], optional: [] },
 } as const;
 
 export type RelationKey = keyof typeof RELATION_FIELDS;
@@ -342,6 +384,24 @@ export function validateRelationField(
     return c === "technical" || c === "language"
       ? { valid: true, normalized: c }
       : { valid: false, reason: 'Must be "technical" or "language".' };
+  }
+  if (relationKey === "performanceReviews" && field === "quarter") {
+    const q = typeof value === "string" ? value.trim().toUpperCase() : "";
+    return REVIEW_QUARTERS.includes(q)
+      ? { valid: true, normalized: q }
+      : { valid: false, reason: "Must be Q1, Q2, Q3, or Q4." };
+  }
+  if (relationKey === "performanceReviews" && field === "year") {
+    return isPlausibleGraduationYear(value)
+      ? { valid: true }
+      : { valid: false, reason: `Must be a year between 1950 and ${CURRENT_YEAR + 1}.` };
+  }
+  if (relationKey === "performanceReviews" && field === "score") {
+    // Percentage range (0-100) — see the RELATION_FIELDS comment above for
+    // why this differs from the server-side entry validator's 0-1 range.
+    return typeof value === "number" && value >= 0 && value <= 100
+      ? { valid: true }
+      : { valid: false, reason: "Must be a percentage from 0 to 100." };
   }
   // experience.description is the only optional free-text field — anything
   // goes (including empty). Every other field here is required free text.
@@ -451,6 +511,9 @@ function validateCertificateEntries(entries: unknown): RelationCheck {
         warnings.push(`"${e.expiryDate}" for ${label}'s expiry date was left out — isn't a real date.`);
       }
     }
+    // Provenance only (which Excel-import source line this came from, if
+    // any) — no shape to validate, just kept if present.
+    if (isNonEmptyText(e.rawText)) entry.rawText = e.rawText;
     cleaned.push(entry);
   });
 
@@ -480,11 +543,38 @@ function validateSkillEntries(entries: unknown): RelationCheck {
   return { cleaned, warnings };
 }
 
+function validatePerformanceReviewEntries(entries: unknown): RelationCheck {
+  const cleaned: Record<string, unknown>[] = [];
+  const warnings: string[] = [];
+  if (!Array.isArray(entries)) return { cleaned, warnings };
+
+  entries.forEach((raw, i) => {
+    const e = raw as Record<string, unknown>;
+    const label = `Performance review entry ${i + 1}`;
+    const quarter = typeof e.quarter === "string" ? e.quarter.trim().toUpperCase() : "";
+    if (!REVIEW_QUARTERS.includes(quarter)) {
+      return warnings.push(`${label} was left out — quarter must be Q1, Q2, Q3, or Q4.`);
+    }
+    if (!isPlausibleGraduationYear(e.year)) {
+      return warnings.push(`${label} was left out — "${e.year}" isn't a plausible year.`);
+    }
+    // This is the fraction (0-1) EmployeeForm already converted the
+    // admin-entered percentage into — see the RELATION_FIELDS comment.
+    if (typeof e.score !== "number" || e.score < 0 || e.score > 1) {
+      return warnings.push(`${label} was left out — score must be a percentage from 0 to 100.`);
+    }
+    cleaned.push({ quarter, year: e.year, score: e.score });
+  });
+
+  return { cleaned, warnings };
+}
+
 const RELATION_VALIDATORS: Record<string, (entries: unknown) => RelationCheck> = {
   experience: validateExperienceEntries,
   education: validateEducationEntries,
   certificates: validateCertificateEntries,
   skills: validateSkillEntries,
+  performanceReviews: validatePerformanceReviewEntries,
 };
 
 // Used for bulk messages (updates, full freeform pastes) — validates
@@ -496,12 +586,21 @@ export function validateExtractedFields(data: Record<string, unknown>) {
 
   for (const [field, rawValue] of Object.entries(data)) {
     if (field in RELATION_VALIDATORS) continue;
-    if (typeof rawValue !== "string" || rawValue.length === 0) continue;
+    // Most fields arrive as strings (Gemini extraction, or the form's own
+    // trimmed text inputs). The numeric Int? fields (age, yearsExpPrev,
+    // etc.) may instead arrive as a real number — coerce to a string just
+    // to run the same shape check, then coerce back to a number below.
+    const isNumeric = typeof rawValue === "number" && NUMERIC_SCALAR_FIELDS.has(field);
+    if (typeof rawValue !== "string" && !isNumeric) continue;
+    const stringValue = isNumeric ? String(rawValue) : (rawValue as string);
+    if (stringValue.length === 0) continue;
 
-    const result = validateFieldValue(field, rawValue);
+    const result = validateFieldValue(field, stringValue);
     if (!result.valid) {
-      warnings.push(`"${rawValue}" for ${field} was left out — ${result.reason}`);
+      warnings.push(`"${stringValue}" for ${field} was left out — ${result.reason}`);
       delete cleaned[field];
+    } else if (NUMERIC_SCALAR_FIELDS.has(field)) {
+      cleaned[field] = Number(stringValue);
     } else if (result.normalized) {
       cleaned[field] = result.normalized;
     }
@@ -515,4 +614,38 @@ export function validateExtractedFields(data: Record<string, unknown>) {
   }
 
   return { cleaned, warnings };
+}
+
+// Validates one row of the batch (tabular) import — scalar fields only.
+// Unlike validateExtractedFields (which silently drops bad fields and
+// returns prose warnings), this returns a STRUCTURED per-field error map so
+// the batch review table can flag exactly which cell in which row is wrong,
+// and a `valid` flag so rows can be selected/deselected for import. fullName
+// is required (it's the one NOT NULL Employee column).
+export function validateBatchRow(data: Record<string, unknown>): {
+  cleaned: Record<string, unknown>;
+  errors: Record<string, string>;
+  valid: boolean;
+} {
+  const cleaned: Record<string, unknown> = {};
+  const errors: Record<string, string> = {};
+
+  for (const [field, rawValue] of Object.entries(data)) {
+    if (rawValue === null || rawValue === undefined || rawValue === "") continue;
+    const stringValue = String(rawValue).trim();
+    if (stringValue.length === 0) continue;
+
+    const result = validateFieldValue(field, stringValue);
+    if (!result.valid) {
+      errors[field] = result.reason ?? "Invalid value.";
+      continue;
+    }
+    cleaned[field] = NUMERIC_SCALAR_FIELDS.has(field)
+      ? Number(stringValue)
+      : result.normalized ?? stringValue;
+  }
+
+  if (!cleaned.fullName) errors.fullName = "Full name is required.";
+
+  return { cleaned, errors, valid: Object.keys(errors).length === 0 };
 }

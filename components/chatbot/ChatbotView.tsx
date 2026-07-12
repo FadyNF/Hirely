@@ -17,6 +17,7 @@ import {
   faFire, faRobot, faPaperPlane, faCheck, faXmark,
   faUserPlus, faUserPen, faCircleQuestion, faIdCard,
   faBriefcase, faGraduationCap, faCertificate, faBolt,
+  faPaperclip, faSpinner, faCircleExclamation, faFileExcel,
 } from '@fortawesome/free-solid-svg-icons';
 import { BASIC_INFO_FIELDS, BASIC_INFO_LABELS } from '@/lib/tabConfig';
 import { useAuth } from '@/context/AuthContext';
@@ -76,7 +77,18 @@ interface Message {
   role: 'user' | 'bot';
   text?: string;
   pending?: ExtractResponse;
+  importQueue?: ImportQueueItem[];
   timestamp: string;
+}
+
+// One entry per file selected for Excel import. 'parsing' while the
+// server-side parse+classify pipeline runs, then settles to 'ready' (with
+// pre-fill data for the review modal) or 'error'.
+interface ImportQueueItem {
+  fileName: string;
+  status: 'parsing' | 'ready' | 'error';
+  initialData?: Record<string, unknown>;
+  error?: string;
 }
 
 function genId() {
@@ -237,6 +249,38 @@ function RelationDetail({ relationKey, employee }: { relationKey: string; employ
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+// ---- ImportQueueCard: live status list while uploaded files parse ----
+
+function ImportQueueCard({ items }: { items: ImportQueueItem[] }) {
+  return (
+    <div className="rounded-xl border bg-white p-4" style={{ borderColor: COLORS.border }}>
+      <div className="flex items-center gap-2 mb-3">
+        <FontAwesomeIcon icon={faFileExcel} style={{ color: COLORS.red }} />
+        <p className="text-sm font-medium" style={{ color: COLORS.black }}>
+          Importing {items.length} file{items.length > 1 ? 's' : ''}
+        </p>
+      </div>
+      <div className="space-y-2">
+        {items.map((item, i) => (
+          <div key={i} className="flex items-center gap-2 text-xs">
+            {item.status === 'parsing' && (
+              <FontAwesomeIcon icon={faSpinner} className="animate-spin" style={{ color: COLORS.gray }} />
+            )}
+            {item.status === 'ready' && <FontAwesomeIcon icon={faCheck} style={{ color: '#16A34A' }} />}
+            {item.status === 'error' && <FontAwesomeIcon icon={faCircleExclamation} style={{ color: COLORS.red }} />}
+            <span className="font-medium truncate" style={{ color: COLORS.black }}>{item.fileName}</span>
+            <span style={{ color: item.status === 'error' ? COLORS.red : COLORS.gray }}>
+              {item.status === 'parsing' && 'Parsing…'}
+              {item.status === 'ready' && 'Ready for review'}
+              {item.status === 'error' && (item.error || "Couldn't be read.")}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -513,13 +557,22 @@ function ConfirmationCard({
 }
 
 // ---- Quick-action starter prompts for the welcome screen ----
-// Unlike theirs (which auto-sends a canned message), these just PREFILL
-// the textarea — lookups and updates genuinely need a real name typed
-// in, so auto-sending an incomplete phrase wouldn't be useful here.
-const QUICK_ACTIONS = [
-  { label: 'Add a new hire', icon: faUserPlus, prefill: 'Add a new hire, ' },
-  { label: 'Look up an employee', icon: faIdCard, prefill: 'Is there an employee named ' },
-  { label: "Update someone's info", icon: faUserPen, prefill: 'Update ' },
+// Unlike theirs (which auto-sends a canned message), the 'prefill' ones
+// just fill the textarea — lookups and updates genuinely need a real name
+// typed in, so auto-sending an incomplete phrase wouldn't be useful here.
+// 'upload' opens the file picker directly instead — there's no text
+// equivalent to prefill. Import gets the same visual prominence as the
+// other three actions specifically because an icon-only button elsewhere
+// on the page tested as easy to miss on first visit.
+type QuickAction =
+  | { type: 'prefill'; label: string; icon: typeof faUserPlus; prefill: string }
+  | { type: 'upload'; label: string; icon: typeof faUserPlus };
+
+const QUICK_ACTIONS: QuickAction[] = [
+  { type: 'prefill', label: 'Add a new hire', icon: faUserPlus, prefill: 'Add a new hire, ' },
+  { type: 'prefill', label: 'Look up an employee', icon: faIdCard, prefill: 'Is there an employee named ' },
+  { type: 'prefill', label: "Update someone's info", icon: faUserPen, prefill: 'Update ' },
+  { type: 'upload', label: 'Import from Excel', icon: faFileExcel },
 ];
 
 export default function ChatbotView() {
@@ -538,16 +591,33 @@ export default function ChatbotView() {
   // The structured create form, when open — holds the pre-fill data the
   // extract step pulled out of the admin's opening message.
   const [formInitialData, setFormInitialData] = useState<Record<string, unknown> | null>(null);
+  // Excel import: the queue of successfully-parsed files awaiting review,
+  // and which one is currently open in the form modal. Separate from
+  // formInitialData above since this queue needs to auto-advance to the
+  // next file on submit OR cancel, instead of just closing.
+  const [importReviewQueue, setImportReviewQueue] = useState<ImportQueueItem[] | null>(null);
+  const [importReviewIndex, setImportReviewIndex] = useState(0);
+  const [importResultCounts, setImportResultCounts] = useState({ created: 0, skipped: 0 });
+  const [isImporting, setIsImporting] = useState(false);
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Holds the pending "hide the drag overlay" timeout — see handleDragOver.
+  const dragHideTimeoutRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoading]);
 
-  // No user messages yet -> show the centered welcome screen instead of
-  // the normal scrolling chat view. Replaces the old static intro bubble.
-  const showWelcome = messages.filter((m) => m.role === 'user').length === 0;
+  // No messages yet -> show the centered welcome screen instead of the
+  // normal scrolling chat view. Replaces the old static intro bubble.
+  // Checks ALL messages, not just user ones: an Excel import can add
+  // bot-only messages (the queue status card, the finish summary) before
+  // the admin ever types anything, and those still need to be visible in
+  // the normal chat log rather than silently appended behind the welcome
+  // screen.
+  const showWelcome = messages.length === 0;
 
   const appendMessage = (msg: Omit<Message, 'timestamp'>) =>
     setMessages((prev) => [...prev, { ...msg, timestamp: nowTimestamp() }]);
@@ -730,9 +800,10 @@ export default function ChatbotView() {
 
   // Submit from the structured create form. Posts straight to the commit
   // route (no Gemini — the fields are already structured). A duplicate
-  // national ID (409) maps back onto that field so the form can flag it
-  // inline; any other error surfaces as a banner. On success we close the
-  // form, remember the new employee, and drop a confirmation into the chat.
+  // unique field (409 — nationalId or companyID) maps back onto that
+  // specific field so the form can flag it inline; any other error
+  // surfaces as a banner. On success we close the form, remember the new
+  // employee, and drop a confirmation into the chat.
   const handleFormSubmit = async (data: BuiltEmployeeData): Promise<SubmitResult> => {
     const res = await authFetch('/api/chatbot/commit', {
       method: 'POST',
@@ -747,11 +818,158 @@ export default function ChatbotView() {
       appendMessage({ id: genId(), role: 'bot', text: `Created a new employee: ${result.employee.fullName}.` });
       return { ok: true };
     }
-    if (res.status === 409) {
-      return { ok: false, fieldError: { field: 'nationalId', message: result.error || 'That national ID already exists.' } };
+    if (res.status === 409 && result.field) {
+      return { ok: false, fieldError: { field: result.field, message: result.error || 'That value already exists.' } };
     }
     return { ok: false, error: result.error || 'Something went wrong saving that.' };
   };
+
+  // Excel import: one request per file, parsed server-side (parse + Gemini
+  // classification), streaming status updates into the queue card as each
+  // finishes rather than waiting for all of them. Once every file has
+  // settled, the successfully-parsed ones start the sequential review.
+  const handleFilesSelected = async (fileList: FileList) => {
+    const files = Array.from(fileList);
+    if (files.length === 0 || isImporting) return;
+    setIsImporting(true);
+
+    const msgId = genId();
+    const items: ImportQueueItem[] = files.map((f) => ({ fileName: f.name, status: 'parsing' }));
+    appendMessage({ id: msgId, role: 'bot', importQueue: items });
+
+    for (let i = 0; i < files.length; i++) {
+      try {
+        const body = new FormData();
+        body.append('file', files[i]);
+        const res = await authFetch('/api/chatbot/import-excel', { method: 'POST', body });
+        const result = await res.json();
+        items[i] = res.ok
+          ? { fileName: files[i].name, status: 'ready', initialData: result.data }
+          : { fileName: files[i].name, status: 'error', error: result.error || "Couldn't be read." };
+      } catch {
+        items[i] = { fileName: files[i].name, status: 'error', error: 'Something went wrong reaching the server.' };
+      }
+      const snapshot = [...items];
+      setMessages((prev) => prev.map((m) => (m.id === msgId ? { ...m, importQueue: snapshot } : m)));
+    }
+
+    setIsImporting(false);
+    const readyItems = items.filter((item) => item.status === 'ready');
+    if (readyItems.length > 0) {
+      setImportResultCounts({ created: 0, skipped: 0 });
+      setImportReviewIndex(0);
+      setImportReviewQueue(readyItems);
+    } else {
+      appendMessage({ id: genId(), role: 'bot', text: "None of the files could be imported — see the errors above." });
+    }
+  };
+
+  // Drag-and-drop across the whole chat panel — scoped wide rather than to
+  // just the input bar, since requiring a precise drop target mid-drag is
+  // exactly the kind of friction that makes a feature easy to miss.
+  //
+  // dragover (not dragenter/dragleave) drives this: it fires continuously
+  // and frequently for as long as the cursor is anywhere over the panel,
+  // including over child elements, so every dragover just (re)shows the
+  // overlay and resets a short hide-timer — no counter needed, and no
+  // dependence on every dragenter having a correctly-paired dragleave
+  // (which bubbling through nested elements does not reliably guarantee).
+  const handleDragOver = (e: React.DragEvent) => {
+    // preventDefault is also required for onDrop to fire at all — the
+    // browser's default is to reject drops everywhere.
+    e.preventDefault();
+    if (!e.dataTransfer.types.includes('Files')) return;
+    setIsDraggingFile(true);
+    if (dragHideTimeoutRef.current) clearTimeout(dragHideTimeoutRef.current);
+    dragHideTimeoutRef.current = window.setTimeout(() => setIsDraggingFile(false), 150);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (dragHideTimeoutRef.current) clearTimeout(dragHideTimeoutRef.current);
+    setIsDraggingFile(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleFilesSelected(e.dataTransfer.files);
+    }
+  };
+
+  // Advances the import review queue by one, closing the modal and
+  // posting a summary once every file has been reviewed. Reads state
+  // straight from the closure rather than functional updaters — this is
+  // only ever called once per render cycle (a button click), so there's
+  // no staleness risk, and it avoids double-incrementing the counts.
+  const advanceImportQueue = (outcome: 'created' | 'skipped') => {
+    const newCounts = { ...importResultCounts, [outcome]: importResultCounts[outcome] + 1 };
+    setImportResultCounts(newCounts);
+
+    const queue = importReviewQueue ?? [];
+    const nextIndex = importReviewIndex + 1;
+    if (nextIndex >= queue.length) {
+      setImportReviewQueue(null);
+      const parts = [
+        newCounts.created > 0 ? `created ${newCounts.created} employee${newCounts.created > 1 ? 's' : ''}` : null,
+        newCounts.skipped > 0 ? `skipped ${newCounts.skipped}` : null,
+      ].filter(Boolean);
+      appendMessage({
+        id: genId(),
+        role: 'bot',
+        text: parts.length > 0 ? `Import finished — ${parts.join(', ')}.` : 'Import finished.',
+      });
+    } else {
+      setImportReviewIndex(nextIndex);
+    }
+  };
+
+  const handleImportFormSubmit = async (data: BuiltEmployeeData): Promise<SubmitResult> => {
+    const res = await authFetch('/api/chatbot/commit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'create', data }),
+    });
+    const result = await res.json();
+
+    if (res.ok) {
+      setLastEmployee({ id: result.employee.id, fullName: result.employee.fullName });
+      advanceImportQueue('created');
+      return { ok: true };
+    }
+    if (res.status === 409 && result.field) {
+      return { ok: false, fieldError: { field: result.field, message: result.error || 'That value already exists.' } };
+    }
+    return { ok: false, error: result.error || 'Something went wrong saving that.' };
+  };
+
+  const handleImportFormCancel = () => advanceImportQueue('skipped');
+
+  // Downloads a file from an auth-gated route: authFetch handles the cookie
+  // (and a token refresh on 401), then we turn the blob into a click on a
+  // temporary object-URL. A plain <a href> would skip the refresh retry.
+  const downloadFromRoute = async (url: string, fallbackName: string) => {
+    try {
+      const res = await authFetch(url);
+      if (!res.ok) {
+        appendMessage({ id: genId(), role: 'bot', text: "Couldn't download that file — please try again." });
+        return;
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get('Content-Disposition') || '';
+      const match = disposition.match(/filename="?([^"]+)"?/);
+      const name = match ? match[1] : fallbackName;
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch {
+      appendMessage({ id: genId(), role: 'bot', text: "Couldn't download that file — please try again." });
+    }
+  };
+
+  const handleDownloadTemplate = () =>
+    downloadFromRoute('/api/templates/single-employee', 'single-employee-template.xlsx');
 
   const handleCancel = (messageId: string) => {
     setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, pending: undefined } : m)));
@@ -786,6 +1004,27 @@ export default function ChatbotView() {
           className="flex items-end bg-gray-100 border rounded-2xl p-1.5 shadow-sm focus-within:ring-4 transition-all"
           style={{ borderColor: COLORS.border }}
         >
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xls,.xlsx"
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              if (e.target.files && e.target.files.length > 0) handleFilesSelected(e.target.files);
+              e.target.value = ''; // allow re-selecting the same file(s) later
+            }}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isImporting}
+            className="p-3 rounded-xl transition-all shrink-0 disabled:opacity-50"
+            style={{ color: COLORS.gray, cursor: isImporting ? 'not-allowed' : 'pointer' }}
+            aria-label="Import employee data from Excel"
+            title="Import from Excel"
+          >
+            <FontAwesomeIcon icon={isImporting ? faSpinner : faPaperclip} className={isImporting ? 'text-sm animate-spin' : 'text-sm'} />
+          </button>
           <textarea
             ref={textareaRef}
             value={input}
@@ -818,12 +1057,33 @@ export default function ChatbotView() {
   );
 
   return (
-    <div className="h-screen flex flex-col bg-white relative overflow-hidden">
+    <div
+      className="h-screen flex flex-col bg-white relative overflow-hidden"
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
       {/* Subtle background texture, matching their exact pattern */}
       <div
         className="absolute inset-0 opacity-[0.04] pointer-events-none"
         style={{ backgroundImage: 'radial-gradient(#475569 1px, transparent 1px)', backgroundSize: '24px 24px' }}
       />
+
+      {isDraggingFile && (
+        <div
+          className="absolute inset-0 z-40 flex items-center justify-center pointer-events-none"
+          style={{ backgroundColor: 'rgba(255,255,255,0.92)' }}
+        >
+          <div
+            className="flex flex-col items-center gap-3 px-10 py-8 rounded-2xl border-2 border-dashed"
+            style={{ borderColor: COLORS.red, backgroundColor: '#FEF2F2' }}
+          >
+            <FontAwesomeIcon icon={faFileExcel} className="text-3xl" style={{ color: COLORS.red }} />
+            <p className="text-sm font-medium" style={{ color: COLORS.black }}>
+              Drop Excel files to import employee data
+            </p>
+          </div>
+        </div>
+      )}
 
       {showWelcome ? (
         <div className="flex-1 flex flex-col items-center justify-center px-4 md:px-8 pb-20 overflow-y-auto">
@@ -843,7 +1103,7 @@ export default function ChatbotView() {
                 {QUICK_ACTIONS.map((qa) => (
                   <button
                     key={qa.label}
-                    onClick={() => handleQuickAction(qa.prefill)}
+                    onClick={() => (qa.type === 'upload' ? fileInputRef.current?.click() : handleQuickAction(qa.prefill))}
                     className="px-5 py-3 bg-gray-100 hover:bg-gray-200 rounded-xl text-sm text-gray-700 transition-all hover:shadow-md flex items-center gap-2"
                   >
                     <FontAwesomeIcon icon={qa.icon} style={{ color: COLORS.red }} />
@@ -851,6 +1111,12 @@ export default function ChatbotView() {
                   </button>
                 ))}
               </div>
+              <button
+                onClick={handleDownloadTemplate}
+                className="mt-4 text-xs text-gray-400 hover:text-gray-600 underline underline-offset-2 transition-colors"
+              >
+                Download a blank Excel template to fill in
+              </button>
             </div>
             <div className="mt-10">{renderInputArea()}</div>
           </div>
@@ -887,6 +1153,7 @@ export default function ChatbotView() {
                             onOpenForm={() => setFormInitialData(m.pending!.data ?? {})}
                           />
                         )}
+                        {m.importQueue && <ImportQueueCard items={m.importQueue} />}
                         <span className="text-xs text-gray-400 mt-1 block">{m.timestamp}</span>
                       </div>
                     </div>
@@ -943,6 +1210,16 @@ export default function ChatbotView() {
           initialData={formInitialData}
           onSubmit={handleFormSubmit}
           onClose={() => setFormInitialData(null)}
+        />
+      )}
+
+      {importReviewQueue !== null && importReviewQueue[importReviewIndex] && (
+        <EmployeeForm
+          key={importReviewIndex}
+          initialData={importReviewQueue[importReviewIndex].initialData}
+          onSubmit={handleImportFormSubmit}
+          onClose={handleImportFormCancel}
+          progressLabel={`Reviewing ${importReviewIndex + 1} of ${importReviewQueue.length}`}
         />
       )}
     </div>

@@ -14,6 +14,9 @@ import { validateExtractedFields } from "@/lib/chatbotValidate";
 const SCALAR_FIELDS = [
   "fullName", "phone", "birthDate", "nationality", "maritalStatus",
   "email", "workLocation", "gender", "nationalId", "militaryStatus",
+  // Optional import-only fields — see OPTIONAL_INFO_FIELDS in tabConfig.ts.
+  "companyID", "hiringDate", "position", "age",
+  "yearsExpPrev", "yearsExpElsewedy", "totalExperience",
 ] as const;
 
 // Pulls out only the scalar fields that actually have a real value —
@@ -56,7 +59,7 @@ export async function POST(request: NextRequest) {
     // Relation arrays only get included if they actually have entries —
     // an empty array would otherwise create a no-op nested write.
     const relationData: Record<string, unknown> = {};
-    for (const key of ["experience", "education", "certificates", "skills"] as const) {
+    for (const key of ["experience", "education", "certificates", "skills", "performanceReviews"] as const) {
       const value = cleaned[key];
       if (Array.isArray(value) && value.length) relationData[key] = { create: value };
     }
@@ -84,14 +87,24 @@ export async function POST(request: NextRequest) {
     });
     return NextResponse.json({ status: "updated", employee });
   } catch (error) {
-    // P2002 = unique-constraint violation. nationalId is the only unique
-    // field on Employee, so any P2002 here is a duplicate national ID —
-    // return an actionable 409 instead of a generic 500 so the admin knows
-    // to fix the ID rather than assuming the app broke. (The DB constraint
-    // is the real guard; this just translates its error into plain words.)
+    // P2002 = unique-constraint violation. nationalId and companyID are
+    // both unique on Employee now, so check WHICH column actually
+    // collided (Prisma reports it in error.meta.target) rather than
+    // assuming it's always nationalId — return an actionable 409 instead
+    // of a generic 500 so the admin knows exactly which field to fix.
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      // The better-sqlite3 adapter leaves meta.target undefined and names the
+      // column deeper in meta (…constraint.fields / the driver's "UNIQUE
+      // constraint failed: Employee.companyID" message), so match against the
+      // whole meta blob rather than target alone.
+      const blob = JSON.stringify(error.meta ?? "").toLowerCase();
+      const [field, label] = blob.includes("companyid")
+        ? ["companyID", "company ID"]
+        : blob.includes("nationalid")
+          ? ["nationalId", "national ID"]
+          : [null, "unique field"];
       return NextResponse.json(
-        { error: "An employee with that national ID already exists." },
+        { error: `An employee with that ${label} already exists.`, field },
         { status: 409 }
       );
     }

@@ -1,6 +1,6 @@
 # CLAUDE.md — Foundry (ElSewedy Electric HR Platform)
 
-> Auto-generated context file. Last updated: 2026-07-09.
+> Auto-generated context file. Last updated: 2026-07-12.
 > Drop this in your project root so Claude Code picks it up on every session.
 
 ---
@@ -103,9 +103,14 @@ npm run start
 
 ## Active / Recent Work (last session)
 
-- **Debugging**: Chatbot employee rename flow — employees renamed via chatbot weren't persisting correctly or were causing validation errors downstream.
-- **Reseed test data**: Test DB was stale / inconsistent. Reseeding to get clean state for debugging.
-- `/compact` was failing with `ConnectionRefused` — likely a WSL2/network blip. If it happens again, just run `/clear` and rely on this file.
+- Working on branch `chatbot-form` (branched off `chatbot`, which holds the earlier auth/validation hardening work).
+- Built a structured "Add Employee" modal form (`components/chatbot/EmployeeForm.tsx`) to replace one-by-one chatbot data entry, wired into the chatbot's create-intent flow.
+- **Excel import/export — fully built this session**, see the "Excel import & export" section in `README.md`:
+  - Single-employee: label-based parser (`lib/excelImport/singleEmployeeParser.ts`, robust to layout shifts — verified), Gemini classification of the template's free-text training lines into education/certificate (`classifyTraining.ts`), mapping into `EmployeeForm` pre-fill (`mapToFormData.ts`), multi-file upload with sequential review modals + drag-and-drop + welcome quick-action in the chatbot, and a template/export builder (`singleEmployeeTemplate.ts`, ExcelJS, styling mirrors the real ElSewedy template) round-tripping through the parser.
+  - Batch: shared column config (`batchColumns.ts`), SheetJS parser (`batchParser.ts`), ExcelJS template/export (`batchTemplate.ts`), a review-table modal on the Records page (upload → per-row valid/error preview → select → import, partial-success reporting), and filtered/full export.
+  - Schema additions: `Employee.companyID/hiringDate/position/age/yearsExpPrev/yearsExpElsewedy/totalExperience`, `Certificate.rawText`, new `PerformanceReview` model — `EmployeeForm` gained a 5th "Performance Reviews" relation section (percentage in the UI, fraction in the DB).
+  - Real bugs found and fixed during verification (not hypothetical): `EmployeeForm.removeEntry` left stale index-keyed errors after deleting an entry; `showWelcome` only checked user-role messages so an upload-only session never left the welcome screen; the counter-based drag-enter/leave overlay double-fired in this environment (switched to a `dragover` + debounce-timeout pattern); P2002 duplicate-key error messages said "unique field" instead of naming the column, because the better-sqlite3 Prisma adapter leaves `meta.target` undefined (fixed in both commit routes to match against the whole `meta` blob).
+- GPA is stored as scale-tagged text (`"2.5/4.0 (American)"`) rather than a bare float, since American/German scales share a denominator — required a schema change (`Education.gpa`: `Float?` → `String?`).
 
 ---
 
@@ -139,6 +144,7 @@ npm run start
 
 ## Notes for Next Session
 
-- Pick up from: **chatbot employee rename + reseed test data debugging**
-- Check if seed script correctly handles the rename case (unique constraint on name? soft delete? etc.)
-- Verify Prisma client was regenerated after any schema changes in last session
+- Excel import/export (single-employee + batch) is done and verified end-to-end — see "Active / Recent Work" above and the README's "Excel import & export" section. Not a next-session task unless new issues turn up.
+- Known, intentionally-deferred gaps in batch import: no inline row-editing in the review table (fix in the sheet and re-upload), no volume/pagination handling for very large sheets.
+- Other long-standing, not-yet-actioned items (pre-date the Excel work, still true): the dead one-by-one `needsInfo` create flow left as unreachable code in `extract/route.ts`/`ChatbotView.tsx`; six pre-existing `react/no-unescaped-entities` ESLint errors in `ChatbotView.tsx`; chatbot rate-limiting (explicitly deprioritized); landing-page metadata bug (never explicitly requested to fix).
+- Check `git status` before starting new work — confirm whether this session's Excel-import work has been committed yet.
