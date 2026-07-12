@@ -13,6 +13,16 @@ import { BASIC_INFO_FIELDS, BASIC_INFO_LABELS, MULTI_TAB_CONFIG, SKILL_CATEGORIE
 export interface FieldGap {
   field: string;
   gapPercent: number;
+  missingCount: number;
+  totalCount: number;
+}
+
+export interface TopIssue {
+  area: string;
+  field: string;
+  gapPercent: number;
+  missingCount: number;
+  totalCount: number;
 }
 
 export interface TabOverviewRow {
@@ -20,6 +30,32 @@ export interface TabOverviewRow {
   label: string;
   overallGap: number | null;
   reviewCount: number;
+}
+
+// Three-way split of employees by basic-info completeness, the same shape
+// as a segmented status bar (e.g. Permanent/Contract/Probation), but for
+// data quality instead of employment type.
+export interface RecordStatusBreakdown {
+  complete: { count: number; percent: number };
+  needsReview: { count: number; percent: number };
+  incomplete: { count: number; percent: number };
+}
+
+export interface CompletionBucket {
+  label: string;
+  count: number;
+}
+
+// A real, ranked "who needs attention" list — the most actionable piece
+// of the dashboard, since it names people instead of just percentages.
+export interface AttentionEmployee {
+  fullName: string;
+  companyID: string;
+  department: string;
+  position: string;
+  missingCount: number;
+  totalFields: number;
+  missingFields: string[];
 }
 
 export interface DashboardData {
@@ -30,10 +66,11 @@ export interface DashboardData {
   multiTabs: Record<string, { coverage: number; fieldCompletion: FieldGap[]; overallGap: number; totalEntries: number }>;
   skills: { category: string; label: string; coverage: number; avgProficiency: number | null }[];
   tabOverview: TabOverviewRow[];
+  topIssues: TopIssue[];
+  recordStatus: RecordStatusBreakdown;
+  completionDistribution: CompletionBucket[];
+  attentionNeeded: AttentionEmployee[];
 }
-
-// EmployeeWithRelations and getAllEmployees now live in lib/employees.ts,
-// shared with the Records page.
 
 function computeBasicInfoStats(employees: EmployeeWithRelations[]) {
   const fieldCompletion: FieldGap[] = BASIC_INFO_FIELDS.map((field) => {
@@ -41,6 +78,8 @@ function computeBasicInfoStats(employees: EmployeeWithRelations[]) {
     return {
       field: BASIC_INFO_LABELS[field],
       gapPercent: employees.length ? Math.round((missing / employees.length) * 100) : 0,
+      missingCount: missing,
+      totalCount: employees.length,
     };
   });
   const overallGap = Math.round(
@@ -57,18 +96,20 @@ function computeMultiTabStats(
   const withEntries = employees.filter((e) => e[tabKey].length > 0).length;
   const coverage = employees.length ? Math.round((withEntries / employees.length) * 100) : 0;
 
-  // Flatten every entry across every employee into one array, so field
-  // completeness is measured against "entries that exist," not employees.
   const allEntries = employees.flatMap(
     (e) => e[tabKey] as unknown as Record<string, unknown>[]
   );
 
   const fieldCompletion: FieldGap[] = config.requiredFields.map((field) => {
-    if (allEntries.length === 0) return { field: config.fieldLabels[field], gapPercent: 0 };
+    if (allEntries.length === 0) {
+      return { field: config.fieldLabels[field], gapPercent: 0, missingCount: 0, totalCount: 0 };
+    }
     const missing = allEntries.filter((entry) => !entry[field]).length;
     return {
       field: config.fieldLabels[field],
       gapPercent: Math.round((missing / allEntries.length) * 100),
+      missingCount: missing,
+      totalCount: allEntries.length,
     };
   });
 
@@ -87,8 +128,113 @@ function computeSkillsStats(employees: EmployeeWithRelations[]) {
       ? Math.round(allProficiencies.reduce((a, b) => a + b, 0) / allProficiencies.length)
       : null;
 
-    return { category: key, label, coverage, avgProficiency };
+    return {
+      category: key,
+      label,
+      coverage,
+      avgProficiency,
+      missingCount: employees.length - withCategory.length,
+      totalCount: employees.length,
+    };
   });
+}
+
+function computeTopIssues(
+  basicInfo: { fieldCompletion: FieldGap[] },
+  multiTabs: DashboardData["multiTabs"],
+  skills: ReturnType<typeof computeSkillsStats>,
+  limit = 5
+): TopIssue[] {
+  const pool: TopIssue[] = [
+    ...basicInfo.fieldCompletion.map((f) => ({ area: "Basic Info", ...f })),
+    ...MULTI_TAB_CONFIG.flatMap((c) =>
+      multiTabs[c.key].fieldCompletion
+        .filter((f) => f.totalCount > 0)
+        .map((f) => ({ area: c.label, ...f }))
+    ),
+    ...skills.map((s) => ({
+      area: "Skills",
+      field: s.label,
+      gapPercent: 100 - s.coverage,
+      missingCount: s.missingCount,
+      totalCount: s.totalCount,
+    })),
+  ];
+
+  return pool
+    .filter((issue) => issue.gapPercent > 0)
+    .sort((a, b) => b.gapPercent - a.gapPercent)
+    .slice(0, limit);
+}
+
+// Returns which basic-info fields a single employee is missing, using the
+// same field list and labels as the tab-level stats, so the two views
+// never disagree with each other.
+function getMissingFields(employee: EmployeeWithRelations): string[] {
+  return BASIC_INFO_FIELDS.filter((field) => !employee[field]).map((field) => BASIC_INFO_LABELS[field]);
+}
+
+function computeRecordStatus(employees: EmployeeWithRelations[]): RecordStatusBreakdown {
+  const total = employees.length;
+  const halfway = Math.ceil(BASIC_INFO_FIELDS.length / 2);
+
+  let complete = 0;
+  let needsReview = 0;
+  let incomplete = 0;
+
+  for (const e of employees) {
+    const missing = getMissingFields(e).length;
+    if (missing === 0) complete += 1;
+    else if (missing < halfway) needsReview += 1;
+    else incomplete += 1;
+  }
+
+  const pct = (n: number) => (total ? Math.round((n / total) * 100) : 0);
+
+  return {
+    complete: { count: complete, percent: pct(complete) },
+    needsReview: { count: needsReview, percent: pct(needsReview) },
+    incomplete: { count: incomplete, percent: pct(incomplete) },
+  };
+}
+
+// Buckets employees by overall basic-info completeness %, giving the
+// "shape" of the data quality problem the way a histogram shows the shape
+// of any distribution — how many people are almost done vs. barely started.
+function computeCompletionDistribution(employees: EmployeeWithRelations[]): CompletionBucket[] {
+  const totalFields = BASIC_INFO_FIELDS.length;
+  const bucketLabels = ["0–19%", "20–39%", "40–59%", "60–79%", "80–99%", "100%"];
+  const counts = new Array(bucketLabels.length).fill(0);
+
+  for (const e of employees) {
+    const missing = getMissingFields(e).length;
+    const completePercent = totalFields ? Math.round(((totalFields - missing) / totalFields) * 100) : 0;
+    if (completePercent >= 100) counts[5] += 1;
+    else counts[Math.min(Math.floor(completePercent / 20), 4)] += 1;
+  }
+
+  return bucketLabels.map((label, i) => ({ label, count: counts[i] }));
+}
+
+// Ranks employees by how many basic-info fields they're missing, so the
+// dashboard can point at actual people instead of only abstract percentages.
+function computeAttentionNeeded(employees: EmployeeWithRelations[], limit = 8): AttentionEmployee[] {
+  return employees
+    .map((e) => {
+      const missingFields = getMissingFields(e);
+      return {
+        fullName: e.fullName || "(No name on file)",
+        companyID: e.companyID || "—",
+        department: e.workLocation || "—",
+        position: e.position || "—",
+        missingCount: missingFields.length,
+        totalFields: BASIC_INFO_FIELDS.length,
+        missingFields,
+      };
+    })
+    .filter((e) => e.missingCount > 0)
+    .sort((a, b) => b.missingCount - a.missingCount)
+    .slice(0, limit);
 }
 
 export async function getDashboardData(): Promise<DashboardData> {
@@ -102,8 +248,11 @@ export async function getDashboardData(): Promise<DashboardData> {
   }
 
   const skills = computeSkillsStats(employees);
+  const topIssues = computeTopIssues(basicInfo, multiTabs, skills);
+  const recordStatus = computeRecordStatus(employees);
+  const completionDistribution = computeCompletionDistribution(employees);
+  const attentionNeeded = computeAttentionNeeded(employees);
 
-  // ---- Tab overview: one row per tab, for the clickable list ----
   const tabOverview: TabOverviewRow[] = [
     { key: "basicInfo", label: "Basic Info", overallGap: basicInfo.overallGap, reviewCount: 0 },
     ...MULTI_TAB_CONFIG.map((c) => ({
@@ -129,12 +278,14 @@ export async function getDashboardData(): Promise<DashboardData> {
   return {
     totalEmployees: employees.length,
     overallCompletion,
-    // No ValidationFlags table exists yet — that's tied to the chatbot,
-    // which is still ahead of us. Honest zero, not a fabricated number.
     needsReviewCount: 0,
     basicInfo,
     multiTabs,
     skills,
     tabOverview,
+    topIssues,
+    recordStatus,
+    completionDistribution,
+    attentionNeeded,
   };
 }

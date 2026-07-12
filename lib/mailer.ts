@@ -28,6 +28,17 @@ const transporter = nodemailer.createTransport({
     pass: process.env.GMAIL_APP_PASSWORD,
   },
   connectionTimeout: 10000,
+  // Force IPv4 — on networks without real IPv6 routing (common on
+  // Windows/some routers), Node still resolves smtp.gmail.com's AAAA
+  // record first and dies with ENETUNREACH before ever trying the
+  // working IPv4 address. Must be nested under `tls`: for secure:true
+  // connections, nodemailer's smtp-connection only merges
+  // `options.tls` into the socket's connect options (see
+  // lib/smtp-connection/index.js, `Object.assign(opts, this.options.tls || {})`)
+  // — a top-level `family` here is silently ignored.
+  tls: {
+    family: 4,
+  },
 });
 
 export async function sendVerificationEmail(to: string, code: string) {

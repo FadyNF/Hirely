@@ -14,7 +14,7 @@ An internal HR tool for Elsewedy Electric that validates and manages employee da
 | Language | TypeScript |
 | Styling | Tailwind CSS v4 |
 | Database | SQLite, via Prisma 7 + `@prisma/adapter-better-sqlite3` |
-| Auth | JWT (`jsonwebtoken`) + `bcryptjs` password hashing, tokens kept in `sessionStorage` |
+| Auth | JWT (`jsonwebtoken`) + `bcryptjs` password hashing, tokens kept in httpOnly cookies |
 | Email (OTP delivery) | Gmail SMTP via `nodemailer` |
 | AI extraction | Google Gemini (`@google/genai`) — `gemini-flash-latest` for full-record extraction, `gemini-flash-lite-latest` for single-field questions |
 | Icons | FontAwesome |
@@ -55,14 +55,22 @@ context/AuthContext.tsx            →  client-side session state + authFetch
 
 `register → (email OTP) → verify-code → login → access token (15m) + refresh token (7d, hashed at rest) → refresh → me`
 
-- Tokens live in `sessionStorage` (via `AuthContext`), not cookies.
-- `AuthContext.authFetch()` is the client's authenticated fetch wrapper: attaches the access token, and on a `401` transparently refreshes and retries once.
-- On the server, `lib/requireAuth.ts` exports `requireUserId(request)` — the one shared helper every protected route should call to verify the Bearer token before doing anything else.
+- Tokens live in httpOnly cookies (access token, 15m, path `/`; refresh token, 7d hashed-at-rest, path `/api/auth`) — never readable by client-side JS, and never held in `AuthContext` state at all.
+- `AuthContext.authFetch()` is the client's authenticated fetch wrapper: cookies are attached automatically by the browser, and on a `401` it transparently calls `/api/auth/refresh` and retries once.
+- On the server, `lib/requireAuth.ts` exports `requireUserId(request)` (reads the cookie from the raw request) and `requireUserIdFromServerCookies()` (via `next/headers`, for Server Components) — the shared helpers every protected route/page calls before doing anything else.
 - Email delivery for the OTP code goes through Gmail SMTP (`lib/mailer.ts`), not a third-party transactional email API — that switch was made because the alternative's free tier only delivers to the account owner's own address.
 
 ### Dashboard
 
-A Server Component (`app/app/page.tsx` + `lib/employeeStats.ts`) that computes live data-completeness statistics straight from the database — which fields are most often missing, per-employee completion percentage, etc. `lib/tabConfig.ts` is the single source of truth for which fields exist and which are required, so the Dashboard, Records, and Chatbot all agree on the same field list.
+A Server Component (`app/app/page.tsx` + `lib/employeeStats.ts`) that computes live data-completeness statistics straight from the database — nothing is fabricated or mocked. `lib/tabConfig.ts` is the single source of truth for which fields exist and which are required, so the Dashboard, Records, and Chatbot all agree on the same field list.
+
+`components/dashboard/DashboardView.tsx` (client, for the accordion's expand/collapse state) renders:
+- **Stat cards** — total employees, overall completion, records needing review.
+- **Completeness distribution** — a bar chart bucketing employees into 0–19% / 20–39% / … / 100% basic-info completeness bands.
+- **Record status** — a segmented bar splitting employees into complete / needs-review / incomplete, by count of missing basic-info fields.
+- **Top issues** — the 5 worst fields across *every* tab (basic info, experience, education, certificates, skills) ranked by gap %, each with a real missing/total count, not just a percentage. Clicking one expands and scrolls to that tab in the section below.
+- **Employees needing attention** — a ranked table of real people (name, company ID, department, position) by how many basic-info fields they're missing — the most actionable section, since it names individuals instead of only showing aggregates.
+- **Tab health overview** — an accordion (click a row to expand it in place) with per-tab detail: a missing-field bar chart for Basic Info, coverage + field-completeness for Experience/Education/Certificates, and per-category coverage/average-proficiency for Skills.
 
 ### Records
 
@@ -94,11 +102,13 @@ Two import paths, both landing in `EmployeeForm` (single) or a review table (bat
 - **Chatbot UI**: a paperclip icon + an "Import from Excel" welcome quick-action open a multi-file picker; drag-and-drop across the whole chat panel also works. Each file gets parsed server-side (`POST /api/chatbot/import-excel`), shows live status in a chat card (Parsing… → Ready / error), then successfully-parsed files open `EmployeeForm` one at a time ("Reviewing 2 of 3") — canceling one advances to the next rather than aborting the batch, and a summary message reports the final created/skipped counts.
 - Template download: `GET /api/templates/single-employee`. Export: `GET /api/export/employee/[id]` (button in the Records detail modal).
 
-**Batch (tabular)** — one row per employee, one column per scalar `Employee` field (relations don't fit a flat row, so they're out of scope for batch — use the single-employee flow or chatbot for those):
-- `lib/excelImport/batchColumns.ts` — the shared column list (field ↔ label ↔ type), used by the template, parser, and export so all three can't drift apart.
-- `lib/excelImport/batchParser.ts` (SheetJS) + `lib/excelImport/batchTemplate.ts` (ExcelJS, template/export).
-- **Records UI**: "Import batch" opens a modal — upload → preview table (each row shows Ready or its specific validation error, in-file duplicate National ID/Company ID caught before commit) → select rows → import. A row that fails validation can't be selected; there's no inline cell-editing yet, so a bad row means fix-it-in-the-sheet-and-re-upload. Commit is per-row, so one collision doesn't abort the rest — the response reports created count and per-row failures.
-- "Export all" / "Export filtered" (respects the Records search box) download via `GET /api/export/batch?search=`. Template: `GET /api/templates/batch`. Parse+preview: `POST /api/import/batch`. Commit: `POST /api/import/batch/commit`.
+**Batch (tabular)** — one row per employee. Scalar `Employee` fields get one column each; the one-to-many relations (Experience, Education, Certificates, Skills, Performance) get a fixed number of *numbered slot* columns per relation instead of one row per entry (e.g. "Experience 1 - Job Title" … "Experience 2 - Job Title"; performance gets exactly 4 slots, one per quarter). A blank slot is simply skipped:
+- `lib/excelImport/batchColumns.ts` — the shared column list AND relation-slot scheme (field ↔ label ↔ type, slot counts per relation), used by the template, parser, and export so all three can't drift apart.
+- `lib/excelImport/batchParser.ts` (SheetJS) — reconstructs each relation's numbered slots back into an entry array per row. Reads cells directly via `XLSX.utils.decode_range`/`encode_cell` rather than `sheet_to_json`, because `sheet_to_json`'s date handling was found (during testing) to shift date cells by the system's local UTC offset.
+- `lib/excelImport/batchTemplate.ts` (ExcelJS, template/export) — `performanceReviews.score` is shown/entered as a 0–100 percentage in the sheet, converted to the 0–1 fraction the DB stores on both read and write.
+- Relation entries are validated with the exact same per-relation validators (`lib/chatbotValidate.ts`'s `RELATION_VALIDATORS`) the chatbot and single-employee flows already use — a bad individual entry drops just that entry (with a warning), it does not invalidate the whole row the way a bad scalar field does.
+- **Records UI**: "Import batch" opens a modal — upload → preview table (each row shows Ready or its specific validation error, in-file duplicate National ID/Company ID caught before commit, plus any relation-entry warnings) → select rows → import. A row that fails scalar validation can't be selected; there's no inline cell-editing yet, so a bad row means fix-it-in-the-sheet-and-re-upload. Commit is per-row, so one collision doesn't abort the rest — the response reports created count and per-row failures.
+- "Export all" / "Export filtered" (respects the Records search box and the filter dropdowns — department/gender/nationality/marital status/military status) download every relation too, via `GET /api/export/batch?search=&department=&gender=&nationality=&maritalStatus=&militaryStatus=`. Template: `GET /api/templates/batch`. Parse+preview: `POST /api/import/batch`. Commit: `POST /api/import/batch/commit`.
 
 ### Landing page
 
