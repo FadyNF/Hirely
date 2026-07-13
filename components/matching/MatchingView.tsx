@@ -30,9 +30,7 @@ export default function MatchingView() {
   const [topN, setTopN] = useState(10);
   const [results, setResults] = useState<MatchResult[]>([]);
   const [loading, setLoading] = useState(false);
-  const [populating, setPopulating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [populateMsg, setPopulateMsg] = useState<string | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
 
   const handleMatch = async () => {
@@ -63,31 +61,6 @@ export default function MatchingView() {
     }
   };
 
-  const handlePopulate = async () => {
-    setPopulating(true);
-    setPopulateMsg(null);
-    setError(null);
-    try {
-      const res = await authFetch("/api/job-matching/populate", {
-        method: "POST",
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || "Failed to populate embeddings.");
-        return;
-      }
-      setPopulateMsg(
-        data.processed === 0
-          ? "All embeddings are already up to date."
-          : `Updated ${data.processed} employee profile${data.processed === 1 ? "" : "s"}.`
-      );
-    } catch {
-      setError("Network error — check your connection.");
-    } finally {
-      setPopulating(false);
-    }
-  };
-
   return (
     <div className="p-8 max-w-5xl mx-auto">
       <div className="mb-8">
@@ -104,31 +77,14 @@ export default function MatchingView() {
         className="rounded-xl border bg-white p-6 mb-6"
         style={{ borderColor: COLORS.border }}
       >
-        <div className="flex items-center justify-between mb-4">
+        <div className="mb-4">
           <label
             className="text-sm font-semibold"
             style={{ color: COLORS.black }}
           >
             Job Description
           </label>
-          <button
-            onClick={handlePopulate}
-            disabled={populating}
-            className="text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors hover:bg-gray-50 disabled:opacity-50"
-            style={{ borderColor: COLORS.border, color: COLORS.gray }}
-          >
-            {populating ? "Syncing..." : "Sync Embeddings"}
-          </button>
         </div>
-
-        {populateMsg && (
-          <div
-            className="text-xs mb-3 px-3 py-2 rounded-lg"
-            style={{ background: "#F0FDF4", color: "#166534" }}
-          >
-            {populateMsg}
-          </div>
-        )}
 
         <textarea
           value={jobDescription}
@@ -203,8 +159,7 @@ export default function MatchingView() {
           style={{ borderColor: COLORS.border }}
         >
           <p className="text-sm" style={{ color: COLORS.gray }}>
-            No matches found. Try syncing embeddings first, or adjust the job
-            description.
+            No matches found. Try adjusting the job description.
           </p>
         </div>
       )}
