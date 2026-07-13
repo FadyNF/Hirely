@@ -45,6 +45,27 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Verified — but the account still needs the root admin to approve it
+    // before it becomes a usable login. Mark verified and clear the code,
+    // and if this account isn't approved yet, return the pending-approval
+    // status instead of issuing tokens. Same shape the login route uses,
+    // so the client can route to the "waiting for approval" screen the
+    // same way regardless of which endpoint produced the response.
+    if (!user.approved) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          emailVerified: true,
+          verificationCode: null,
+          codeExpiresAt: null,
+        },
+      });
+      return NextResponse.json({
+        status: "pending_approval",
+        email: user.email,
+      });
+    }
+
     // ---- Build the two tokens ----
     // We store a HASH of the refresh token, not the token itself — same
     // reason we hash passwords: if the database ever leaked, the raw
@@ -70,7 +91,7 @@ export async function POST(request: NextRequest) {
     });
 
     const response = NextResponse.json({
-      user: { id: user.id, email: user.email },
+      user: { id: user.id, email: user.email, role: user.role },
     });
     setAuthCookies(response, accessToken, refreshToken);
     return response;

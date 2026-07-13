@@ -281,7 +281,7 @@ export default function BatchImportModal({ onClose, onImported }: { onClose: () 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(17,17,17,0.5)' }} onClick={onClose}>
       <div
-        className="w-full max-w-4xl bg-white rounded-xl overflow-hidden flex flex-col relative"
+        className="w-full max-w-4xl bg-white rounded-xl overflow-hidden flex flex-col relative animate-fade-in"
         style={{ height: 'min(680px, 88vh)' }}
         onClick={(e) => e.stopPropagation()}
         onDragOver={handleDragOver}
@@ -306,7 +306,7 @@ export default function BatchImportModal({ onClose, onImported }: { onClose: () 
             <h2 className="text-lg font-semibold" style={{ color: COLORS.black }}>Import employees from a batch sheet</h2>
             <p className="text-xs" style={{ color: COLORS.gray }}>Upload the tabular template — one row per employee. Drag and drop, or select one or more files.</p>
           </div>
-          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full text-lg hover:bg-gray-100" style={{ color: COLORS.gray }} aria-label="Close">×</button>
+          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full text-lg transition-colors hover:bg-gray-100" style={{ color: COLORS.gray }} aria-label="Close">×</button>
         </div>
 
         <div className="px-6 py-4 overflow-y-auto flex-1">
@@ -348,14 +348,14 @@ export default function BatchImportModal({ onClose, onImported }: { onClose: () 
               <button
                 onClick={() => fileInputRef.current?.click()}
                 disabled={busy}
-                className="text-sm font-semibold px-5 py-2.5 rounded-lg text-white disabled:opacity-60"
+                className="text-sm font-semibold px-5 py-2.5 rounded-lg text-white transition-all hover:opacity-90 hover:shadow-md disabled:opacity-60"
                 style={{ backgroundColor: COLORS.red }}
               >
                 {busy ? 'Reading…' : 'Choose file(s)'}
               </button>
               <button
                 onClick={() => downloadFromRoute(authFetch, '/api/templates/batch', 'batch-employees-template.xlsx')}
-                className="text-xs text-gray-400 hover:text-gray-600 underline underline-offset-2"
+                className="text-xs text-gray-400 transition-colors hover:text-gray-600 underline underline-offset-2"
               >
                 Download the blank batch template
               </button>
@@ -383,7 +383,7 @@ export default function BatchImportModal({ onClose, onImported }: { onClose: () 
                   </thead>
                   <tbody>
                     {rows.map((r) => (
-                      <tr key={r.rowNumber} className="border-t align-top" style={{ borderColor: '#F3F4F6' }}>
+                      <tr key={r.rowNumber} className="border-t align-top transition-colors hover:bg-gray-50" style={{ borderColor: '#F3F4F6' }}>
                         <td className="p-2 text-center">
                           <input type="checkbox" checked={selected.has(r.rowNumber)} onChange={() => toggle(r.rowNumber)} />
                         </td>
@@ -446,14 +446,14 @@ export default function BatchImportModal({ onClose, onImported }: { onClose: () 
         </div>
 
         <div className="px-6 py-4 border-t flex items-center justify-end gap-3 shrink-0" style={{ borderColor: COLORS.border }}>
-          <button onClick={onClose} className="text-sm font-medium px-4 py-2 rounded-lg border hover:bg-gray-50" style={{ borderColor: COLORS.border, color: COLORS.black }}>
+          <button onClick={onClose} className="text-sm font-medium px-4 py-2 rounded-lg border transition-colors hover:bg-gray-50" style={{ borderColor: COLORS.border, color: COLORS.black }}>
             {result ? 'Done' : 'Cancel'}
           </button>
           {rows && !result && (
             <button
               onClick={handleImport}
               disabled={busy || selectedCount === 0}
-              className="text-sm font-semibold px-5 py-2 rounded-lg text-white disabled:opacity-50"
+              className="text-sm font-semibold px-5 py-2 rounded-lg text-white transition-all hover:opacity-90 hover:shadow-md disabled:opacity-50 disabled:hover:opacity-50 disabled:hover:shadow-none"
               style={{ backgroundColor: COLORS.red }}
             >
               {busy ? 'Importing…' : `Import ${selectedCount} selected`}

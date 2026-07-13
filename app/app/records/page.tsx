@@ -1,10 +1,13 @@
 // app/app/records/page.tsx
 
+import type { Metadata } from "next";
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { requireUserIdFromServerCookies } from "@/lib/requireAuth";
 import { getAllEmployees } from "@/lib/employees";
 import RecordsView from "@/components/records/RecordsView";
+
+export const metadata: Metadata = { title: "Records" };
 
 export default async function RecordsPage() {
   // The REAL auth check — runs before any data is fetched.

@@ -5,6 +5,7 @@ import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { signTokenPair, setAuthCookies } from "@/lib/authTokens";
 import { sendVerificationEmail } from "@/lib/mailer";
+import { ensureRootAdminFromEnv, isRootEmail } from "@/lib/rootAdmin";
 
 export async function POST(request: NextRequest) {
   try {
@@ -16,6 +17,12 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    // Runs BEFORE the credential check — for the root email specifically,
+    // this (re)hashes the env-configured password into the DB row. That
+    // way the same bcrypt.compare below works uniformly for both regular
+    // admins and root, without a separate "is this the root?" branch.
+    if (isRootEmail(email)) await ensureRootAdminFromEnv();
 
     const user = await prisma.user.findUnique({ where: { email } });
 
@@ -69,6 +76,18 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // ---- Approval gate — separate from email verification ----
+    // Credentials + OTP can both be valid but the account still isn't
+    // usable until the root admin has approved it. Return a distinct
+    // status so the client can route to the "waiting for approval" screen
+    // instead of showing a wrong-password error.
+    if (!user.approved) {
+      return NextResponse.json({
+        status: "pending_approval",
+        email: user.email,
+      });
+    }
+
     // ---- All checks passed — issue tokens, same as verify-code did ----
     const { accessToken, refreshToken, refreshTokenHash } = signTokenPair(user.id, user.email);
 
@@ -78,7 +97,7 @@ export async function POST(request: NextRequest) {
     });
 
     const response = NextResponse.json({
-      user: { id: user.id, email: user.email },
+      user: { id: user.id, email: user.email, role: user.role },
     });
     setAuthCookies(response, accessToken, refreshToken);
     return response;

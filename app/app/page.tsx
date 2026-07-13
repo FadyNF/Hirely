@@ -6,10 +6,13 @@
 // the finished HTML + data to the browser. DashboardView (a separate
 // Client Component) only handles the interactive tab-switching on top.
 
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { requireUserIdFromServerCookies } from "@/lib/requireAuth";
 import { getDashboardData } from "@/lib/employeeStats";
 import DashboardView from "@/components/dashboard/DashboardView";
+
+export const metadata: Metadata = { title: "Dashboard" };
 
 export default async function DashboardPage() {
   // The REAL auth check — this runs before any data is fetched, unlike

@@ -68,7 +68,7 @@ function StatCard({
 }) {
     return (
         <div
-            className="rounded-xl border bg-white p-5"
+            className="rounded-xl border bg-white p-5 transition-all duration-200 hover:shadow-md hover:-translate-y-0.5"
             style={{ borderColor: COLORS.border }}
         >
             <p className="text-sm mb-1.5" style={{ color: COLORS.gray }}>
@@ -344,7 +344,7 @@ function AttentionTable({ employees }: { employees: AttentionEmployee[] }) {
                     style={{ borderColor: COLORS.border }}
                 >
                     {employees.map((e) => (
-                        <tr key={e.companyID + e.fullName}>
+                        <tr key={e.companyID + e.fullName} className="transition-colors hover:bg-gray-50">
                             <td
                                 className="px-2 py-2.5"
                                 style={{ color: COLORS.black }}
@@ -711,7 +711,7 @@ function FlaggedFieldsList({ flags }: { flags: FlaggedField[] }) {
                     </div>
                     <a
                         href={`/app/records?highlight=${flag.employeeId}`}
-                        className="text-xs font-medium shrink-0 underline underline-offset-2"
+                        className="text-xs font-medium shrink-0 underline underline-offset-2 transition-colors hover:text-red-800"
                         style={{ color: COLORS.red }}
                     >
                         View record
@@ -719,7 +719,7 @@ function FlaggedFieldsList({ flags }: { flags: FlaggedField[] }) {
                     <button
                         onClick={() => resolve(flag.id)}
                         disabled={resolvingId === flag.id}
-                        className="text-xs font-medium px-3 py-1.5 rounded-lg border hover:bg-gray-50 disabled:opacity-50 shrink-0"
+                        className="text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors hover:bg-gray-50 disabled:opacity-50 shrink-0"
                         style={{ borderColor: COLORS.border, color: COLORS.black }}
                     >
                         {resolvingId === flag.id ? "…" : "Mark reviewed"}

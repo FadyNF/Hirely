@@ -47,7 +47,8 @@ context/AuthContext.tsx            →  client-side session state + authFetch
 
 ### Data model (`prisma/schema.prisma`)
 
-- **`User`** — an HR admin who logs into Foundry. Email + hashed password, an OTP verification code + expiry, a hashed refresh token.
+- **`User`** — an HR admin who logs into Foundry. Email + hashed password, an OTP verification code + expiry, a hashed refresh token, plus `role` (`"admin"` | `"root"`) and `approved` (root-admin gate, see "Root admin approval" below).
+- **`SupportRequest`** — a message from an admin (approved or still-pending) to the root admin: `type` (issue/request/other), subject, message, `status` (open/resolved). `submittedById` is nullable with `onDelete: SetNull` so a declined admin's request history survives their account being hard-deleted; `submittedByEmail` keeps a readable snapshot regardless.
 - **`Employee`** — the actual record being managed: name, phone, birth date, nationality, marital status, email, work location, gender, national ID, military status — plus (added for Excel import) `companyID`, `hiringDate`, `position`, `age`, `yearsExpPrev`, `yearsExpElsewedy`, `totalExperience`. All optional except `fullName`, since the whole point of this project is tracking *incomplete* profiles. `nationalId` and `companyID` are both nullable-unique.
 - **`Experience`, `Education`, `Certificate`, `Skill`, `PerformanceReview`** — one-to-many child tables off `Employee`, cascade-deleted with the parent. `Certificate.rawText` holds the original Excel source line when a certificate came from import, for admin traceability. `PerformanceReview.score` is stored as a 0–1 fraction (the UI shows/edits it as a 0–100 percentage).
 
@@ -114,6 +115,31 @@ Two import paths, both landing in `EmployeeForm` (single) or a review table (bat
 
 Static HTML (`public/Foundry_Landing_Page.html`), served at `/` via a Next.js rewrite rather than a React page — animated hero mockup (layered "ghost" cards, a periodic scan-sweep, a looping data-reveal sequence), scroll-triggered reveals, and a barely-there ambient background texture shared visually with the in-app chatbot.
 
+### Branding & page metadata
+
+`components/shared/Logo.tsx` wraps the Wedy.AI wordmark/mark (`public/images/wedy-mark.png`) at a caller-specified height, used everywhere the app previously showed a `faFire` gradient badge — the sidebar, login/register screens, and the chatbot welcome screen. `app/icon.png` is the app favicon; `public/images/wedy-mark.png` doubles as the landing page's favicon.
+
+Every route sets its own `<title>` via a Metadata export, composed through `app/layout.tsx`'s title template (`"%s · Foundry"`) rather than each page hardcoding the full string: `/login` → "Sign In · Foundry", `/register` → "Create Account · Foundry", `/app` → "Dashboard · Foundry", `/app/records` → "Records · Foundry", `/app/chatbot` → "Chatbot · Foundry", `/pending` → "Waiting for approval · Foundry".
+
+### Root admin approval & support requests
+
+Not every signup can self-activate — a new admin's account is unusable (no tokens issued on login, even with the right password and a verified email) until the **root admin** approves it. This is deliberately separate from email verification: a person can fully OTP-verify their email and still be stuck on a "waiting for approval" screen.
+
+- **The root identity is env-configured, not seeded.** `ADMIN_EMAIL` / `ADMIN_PASS` in `.env` are the only privileged account. `lib/rootAdmin.ts`'s `ensureRootAdminFromEnv()` upserts a `User` row matching those values — `role: "root"`, `approved: true` — every time that email attempts to log in, so rotating the password or changing the email takes effect on the next login attempt with no restart, no seed script, and no direct DB edit. The register route refuses signups for that email (`isRootEmail()`), since the root can't be created through the normal flow.
+- **Approval gate.** `POST /api/auth/login` and `POST /api/auth/verify-code` both check `user.approved` after credentials/OTP succeed; an unapproved user gets back `{ status: "pending_approval", email }` instead of auth cookies. `AuthContext` persists that state to `sessionStorage` (mirroring how `pendingVerification` already worked) so a page reload on the waiting screen doesn't bounce the user back to `/login`.
+- **`/pending`** — the waiting screen (`components/auth/PendingApprovalScreen.tsx`). Shows the account's email, a "Request assistance" button (opens the support form, pre-filled and locked to that email — works with no auth cookie, since the account isn't approved yet), and "Sign out".
+- **`/app/admin`** — the root's console (`components/admin/AdminConsoleView.tsx`), gated server-side by `requireRootUserIdFromServerCookies()` (`lib/requireAuth.ts`) — a non-root admin who navigates here directly gets redirected to `/app`, not shown an error page. Two sections:
+  - **Pending admin approvals** — every `approved: false` admin, oldest first. **Approve** flips `approved` to `true`. **Decline hard-deletes the `User` row** (not a soft "rejected" flag) so the same email can freely re-register later — `POST`/`DELETE /api/admin/approvals/[userId]`.
+  - **Support requests** — every submission, newest-open-first, with type icon (Issue/Request/Other), submitter email, message, and a Mark resolved/Reopen toggle (`PATCH /api/admin/support-requests/[id]`). If the submitter's account was later declined, the row still shows their email (`submittedByEmail` is a snapshot, kept even after `submittedById` nulls out via `onDelete: SetNull`).
+- **Support request form** — `components/shared/SupportRequestModal.tsx`, submitted through `POST /api/support-requests` (no auth required, so a pending or logged-out user can still reach root). Reachable two ways: the sidebar's "Report an issue" item (any logged-in admin) and the pending-approval screen (email pre-filled and locked).
+- **Sidebar** — root-only "Admin" nav link and a small "Root admin" label under the account email; "Report an issue" is visible to everyone.
+
+### Hover / transition polish
+
+Interactive elements across the app (nav links, stat cards, table rows, buttons, filter selects, the batch-import modal) use `transition-colors`/`transition-all` plus a hover state, rather than being static until clicked. Two patterns recur because of two specific gotchas hit while building this:
+- **State-driven hover, not Tailwind `hover:`, when an element also has an inline conditional `style`** — React silently reverts DOM mutations on the next render, and Tailwind `hover:` classes lose to an inline `style` prop on the same property. Anywhere background/color already depends on `style={{ ... }}` (the sidebar's active nav link, tab switchers), hover is tracked as component state instead.
+- **Hover handlers on a wrapping `<span>`, not directly on `<Link>`**, where `next/link` needs a custom hover effect — `next/link` attaches its own `onMouseEnter` internally for prefetching, which intercepts a handler passed directly to it.
+
 ---
 
 ## Getting started
@@ -131,6 +157,8 @@ Create a `.env` file with:
 | `GEMINI_API_KEY` | Google Gemini API key for chatbot extraction |
 | `GMAIL_USER` | The Gmail address OTP emails are sent from |
 | `GMAIL_APP_PASSWORD` | A Google Account **App Password** (not your real password) — Google Account → Security → 2-Step Verification → App Passwords |
+| `ADMIN_EMAIL` | The root admin's email — the one account that can approve pending admins and triage support requests |
+| `ADMIN_PASS` | The root admin's password — re-hashed into the DB on every login attempt for that email, so changing it takes effect immediately |
 
 Then:
 

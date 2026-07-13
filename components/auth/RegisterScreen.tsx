@@ -15,6 +15,7 @@ import {
   faEnvelope,
 } from '@fortawesome/free-solid-svg-icons';
 import { useAuth } from '@/context';
+import Logo from '@/components/shared/Logo';
 
 interface FieldErrors {
   email?: string;
@@ -117,8 +118,15 @@ export default function RegisterScreen({ onSwitchToLogin }: RegisterScreenProps)
     setVerifyError('');
     setIsVerifying(true);
     try {
-      await verifyCode(pendingVerification.email, code);
-      router.replace('/app');
+      const outcome = await verifyCode(pendingVerification.email, code);
+      // OTP was fine, but the account still needs root approval — go to
+      // the waiting screen instead of /app (which would just bounce us
+      // back to /login since there's no auth cookie yet).
+      if (outcome.status === 'pending_approval') {
+        router.replace('/pending');
+      } else {
+        router.replace('/app');
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Invalid or expired code. Please try again.';
       setVerifyError(message);
@@ -163,9 +171,8 @@ export default function RegisterScreen({ onSwitchToLogin }: RegisterScreenProps)
         <div className="flex-1" />
         <div className="w-full max-w-md mx-4">
           <div className="text-center mb-8 animate-login-fade-in-up login-delay-1">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-5"
-              style={{ background: 'linear-gradient(135deg, #B91C1C, #DC2626)', boxShadow: '0 4px 16px rgba(185,28,28,0.25)' }}>
-              <FontAwesomeIcon icon={faFire} className="text-white text-2xl" />
+            <div className="inline-flex items-center justify-center mb-5">
+              <Logo height={56} />
             </div>
             <h1 className="text-xl font-bold tracking-tight text-gray-800">Foundry</h1>
             <div className="login-underline-accent w-16 mx-auto mt-2.5 mb-2.5" />
@@ -264,14 +271,8 @@ export default function RegisterScreen({ onSwitchToLogin }: RegisterScreenProps)
 
       <div className="w-full max-w-md mx-4">
         <div className="text-center mb-8 animate-login-fade-in-up login-delay-1">
-          <div
-            className="inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-5"
-            style={{
-              background: 'linear-gradient(135deg, #B91C1C, #DC2626)',
-              boxShadow: '0 4px 16px rgba(185, 28, 28, 0.25)',
-            }}
-          >
-            <FontAwesomeIcon icon={faFire} className="text-white text-2xl" />
+          <div className="inline-flex items-center justify-center mb-5">
+            <Logo height={56} />
           </div>
           <h1 className="text-xl font-bold tracking-tight text-gray-800">Foundry</h1>
           <div className="login-underline-accent w-16 mx-auto mt-2.5 mb-2.5" />

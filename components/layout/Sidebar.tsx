@@ -12,7 +12,6 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
-  faFire,
   faGaugeHigh,
   faTableList,
   faComments,
@@ -20,11 +19,14 @@ import {
   faRightFromBracket,
   faChevronLeft,
   faChevronRight,
+  faUserShield,
+  faLifeRing,
 } from '@fortawesome/free-solid-svg-icons';
 import { useAuth } from '@/context';
+import Logo from '@/components/shared/Logo';
+import SupportRequestModal from '@/components/shared/SupportRequestModal';
 
 const RED = '#DC2626';
-const RED_DARK = '#B91C1C';
 
 // The three main destinations. Defined as data, not repeated JSX, so
 // adding a fourth page later is a one-line change here, not a copy-paste.
@@ -47,26 +49,43 @@ function NavLink({
   collapsed: boolean;
   active: boolean;
 }) {
+  const [hovered, setHovered] = useState(false);
+  // Background is state-driven (not a raw hover: class) because it's
+  // already React-controlled via `active` — a plain Tailwind hover:
+  // class can't win against an inline style set on the same property.
+  // The hover handlers live on this wrapping span, not on <Link> itself —
+  // next/link uses its own onMouseEnter internally (prefetch-on-hover),
+  // and layering another one directly on it is unreliable.
+  const background = active ? 'rgba(220, 38, 38, 0.08)' : hovered ? '#F9FAFB' : 'transparent';
   return (
+    <span
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      className="block"
+    >
     <Link
       href={href}
-      className="flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors"
+      className="flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 hover:translate-x-0.5"
       style={{
         color: active ? RED : '#4B5563',
-        backgroundColor: active ? 'rgba(220, 38, 38, 0.08)' : 'transparent',
+        backgroundColor: background,
         borderLeft: active ? `3px solid ${RED}` : '3px solid transparent',
       }}
     >
       <FontAwesomeIcon icon={icon} className="text-base w-4 shrink-0" />
       {!collapsed && <span className="truncate">{label}</span>}
     </Link>
+    </span>
   );
 }
 
 export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
+  const [supportOpen, setSupportOpen] = useState(false);
   const pathname = usePathname();
   const { user, logout } = useAuth();
+
+  const isRoot = user?.role === 'root';
 
   // Exact match for "/app" (Dashboard), but a "starts with" check for the
   // others — so "/app/records/123" (a future detail view) still highlights
@@ -82,12 +101,7 @@ export default function Sidebar() {
       {/* Logo + collapse toggle */}
       <div className="flex items-center justify-between px-4 py-4 border-b" style={{ borderColor: '#E5E5E5' }}>
         <div className="flex items-center gap-2 overflow-hidden">
-          <div
-            className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-            style={{ background: `linear-gradient(135deg, ${RED_DARK}, ${RED})` }}
-          >
-            <FontAwesomeIcon icon={faFire} className="text-white text-sm" />
-          </div>
+          <Logo height={28} className="shrink-0" />
           {!collapsed && <span className="font-bold text-gray-800 truncate">Foundry</span>}
         </div>
         <button
@@ -113,17 +127,36 @@ export default function Sidebar() {
             active={isActive(item.href)}
           />
         ))}
+        {/* Only the root sees this — added conditionally so no non-root
+            admin can accidentally click a link that would 302 them right
+            back to /app anyway. */}
+        {isRoot && (
+          <NavLink
+            href="/app/admin"
+            label="Admin"
+            icon={faUserShield}
+            collapsed={collapsed}
+            active={isActive('/app/admin')}
+          />
+        )}
       </nav>
 
       {/* Bottom: account options, separated by a divider */}
       <div className="px-3 py-4 border-t space-y-1" style={{ borderColor: '#E5E5E5' }}>
-        <Link
+        {/* <Link
           href="/app/settings"
           className="flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors"
         >
           <FontAwesomeIcon icon={faGear} className="text-base w-4 shrink-0" />
           {!collapsed && <span>Settings</span>}
-        </Link>
+        </Link> */}
+        <button
+          onClick={() => setSupportOpen(true)}
+          className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors"
+        >
+          <FontAwesomeIcon icon={faLifeRing} className="text-base w-4 shrink-0" />
+          {!collapsed && <span>Report an issue</span>}
+        </button>
         <button
           onClick={logout}
           className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors"
@@ -142,10 +175,27 @@ export default function Sidebar() {
             >
               {user.email.charAt(0).toUpperCase()}
             </div>
-            <span className="text-xs text-gray-500 truncate">{user.email}</span>
+            <div className="min-w-0 flex-1">
+              <span className="text-xs text-gray-500 truncate block">{user.email}</span>
+              {isRoot && (
+                <span
+                  className="text-[10px] font-semibold uppercase tracking-wider"
+                  style={{ color: RED, letterSpacing: '0.08em' }}
+                >
+                  Root admin
+                </span>
+              )}
+            </div>
           </div>
         )}
       </div>
+
+      {supportOpen && user && (
+        <SupportRequestModal
+          submitterEmail={user.email}
+          onClose={() => setSupportOpen(false)}
+        />
+      )}
     </aside>
   );
 }

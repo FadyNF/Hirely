@@ -14,7 +14,7 @@ import ReactMarkdown from 'react-markdown';
 import Image from 'next/image';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
-  faFire, faRobot, faPaperPlane, faCheck, faXmark,
+  faRobot, faPaperPlane, faCheck, faXmark,
   faUserPlus, faUserPen, faCircleQuestion, faIdCard,
   faBriefcase, faGraduationCap, faCertificate, faBolt,
   faPaperclip, faSpinner, faCircleExclamation, faFileExcel,
@@ -25,6 +25,7 @@ import { BASIC_INFO_FIELDS, BASIC_INFO_LABELS } from '@/lib/tabConfig';
 import { useAuth } from '@/context/AuthContext';
 import EmployeeForm, { type BuiltEmployeeData, type SubmitResult } from './EmployeeForm';
 import BatchImportModal from '@/components/shared/BatchImportModal';
+import Logo from '@/components/shared/Logo';
 
 const RELATION_LABELS: Record<string, string> = {
   experience: 'Experience', education: 'Education',
@@ -707,6 +708,7 @@ export default function ChatbotView() {
   // where Claude's own chat puts its attach control.
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showAttachCallout, setShowAttachCallout] = useState(true);
+  const [attachHovered, setAttachHovered] = useState(false);
   const [batchModalOpen, setBatchModalOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1157,9 +1159,11 @@ export default function ChatbotView() {
               className="p-2.5 rounded-xl transition-all disabled:opacity-50"
               style={{
                 color: showAttachMenu ? COLORS.red : COLORS.gray,
-                backgroundColor: showAttachMenu ? COLORS.pinkBg : 'transparent',
+                backgroundColor: showAttachMenu ? COLORS.pinkBg : attachHovered ? '#F3F4F6' : 'transparent',
                 cursor: isImporting ? 'not-allowed' : 'pointer',
               }}
+              onMouseEnter={() => setAttachHovered(true)}
+              onMouseLeave={() => setAttachHovered(false)}
               aria-label="Import or export employee data as Excel spreadsheets"
             >
               <FontAwesomeIcon icon={isImporting ? faSpinner : faPaperclip} className={isImporting ? 'text-lg animate-spin' : 'text-lg'} />
@@ -1173,7 +1177,7 @@ export default function ChatbotView() {
                 <div className="absolute -bottom-1.5 left-5 w-3 h-3 rotate-45" style={{ backgroundColor: COLORS.red }} />
                 <button
                   onClick={() => setShowAttachCallout(false)}
-                  className="absolute top-1.5 right-1.5 w-5 h-5 flex items-center justify-center rounded-full hover:bg-black/10 text-white"
+                  className="absolute top-1.5 right-1.5 w-5 h-5 flex items-center justify-center rounded-full transition-colors hover:bg-black/10 text-white"
                   aria-label="Dismiss"
                 >
                   <FontAwesomeIcon icon={faXmark} className="text-xs" />
@@ -1207,7 +1211,7 @@ export default function ChatbotView() {
           <button
             onClick={handleSend}
             disabled={!input.trim() || isLoading}
-            className="p-3 rounded-xl transition-all shrink-0 text-white"
+            className="p-3 rounded-xl transition-all shrink-0 text-white enabled:hover:opacity-90 enabled:hover:shadow-md"
             style={{
               backgroundColor: input.trim() && !isLoading ? COLORS.red : '#D1D5DB',
               cursor: input.trim() && !isLoading ? 'pointer' : 'not-allowed',
@@ -1275,11 +1279,8 @@ export default function ChatbotView() {
         <div className="flex-1 flex flex-col items-center justify-center px-4 md:px-8 pb-20 overflow-y-auto">
           <div className="w-full max-w-2xl mx-auto">
             <div className="text-center mb-10 animate-fade-in">
-              <div
-                className="w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg"
-                style={{ background: `linear-gradient(135deg, ${COLORS.redDark}, ${COLORS.red})` }}
-              >
-                <FontAwesomeIcon icon={faFire} className="text-white text-3xl" />
+              <div className="flex items-center justify-center mx-auto mb-6">
+                <Logo height={72} />
               </div>
               <h1 className="text-3xl md:text-4xl font-bold text-gray-900 mb-3">Foundry</h1>
               <p className="text-gray-500 text-lg">

@@ -24,6 +24,45 @@ model User {
 
   refreshTokenHash String?
 
+  // "admin" is any regular user; "root" is the single privileged account
+  // seeded from ROOT_ADMIN_EMAIL / ROOT_ADMIN_PASSWORD env vars (see
+  // lib/rootAdmin.ts). The root can approve/decline pending admins and
+  // triage support requests; regular admins can't.
+  role String @default("admin")
+
+  // Approval gate that runs AFTER email verification: even a user with a
+  // valid password + verified email can't log in until root approves them.
+  // Existing users are backfilled to `true` in the migration so nobody
+  // gets locked out on deploy. The root row upserted from env is always
+  // created with `true` — the root doesn't approve itself.
+  approved Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  supportRequests SupportRequest[]
+}
+
+// A message from a regular admin to the root admin — either reporting a
+// problem, requesting something (a feature, extra access, etc.), or the
+// catch-all "other". Pending admins can also submit these to appeal a
+// rejection or ask why they haven't been approved yet, so the FK is
+// intentionally onDelete: SetNull rather than Cascade — declining an
+// admin (which hard-deletes their User row) shouldn't erase the trail
+// of what they said to the root before that decision.
+model SupportRequest {
+  id      Int    @id @default(autoincrement())
+  type    String // "issue" | "request" | "other"
+  subject String
+  message String
+  status  String @default("open") // "open" | "resolved"
+
+  // Kept even after the submitter's User row is deleted, so root can still
+  // see who wrote what. Two fields (id + email snapshot) so we don't lose
+  // the humanly-recognizable identity when the FK nulls out.
+  submittedById    Int?
+  submittedByEmail String
+  submittedBy      User? @relation(fields: [submittedById], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
 }
 

@@ -1,6 +1,6 @@
 # CLAUDE.md — Foundry (ElSewedy Electric HR Platform)
 
-> Auto-generated context file. Last updated: 2026-07-12.
+> Auto-generated context file. Last updated: 2026-07-13.
 > Drop this in your project root so Claude Code picks it up on every session.
 
 ---
@@ -14,12 +14,12 @@ It handles employee records, validates data integrity, and long-term will suppor
 
 | Layer | Technology |
 |---|---|
-| Framework | Next.js 15 (App Router) |
+| Framework | Next.js 16.2 (App Router, Turbopack) |
 | Language | TypeScript |
 | Styling | Tailwind CSS v4 |
 | ORM | Prisma 7 |
 | Database | SQLite (local dev) |
-| AI | Google Gemini API |
+| AI | Google Gemini API (`@google/genai`) |
 | Runtime | Node.js (Windows + WSL2) |
 
 ---
@@ -67,7 +67,10 @@ foundry/
 - Invalid records should be flagged, not silently dropped.
 
 ### Auth
-- <!-- TODO: fill in auth approach (NextAuth? custom? none?) -->
+- Custom (no NextAuth): `register → OTP email → verify-code → login → access token (15m) + refresh token (7d, hashed at rest) → refresh`. Tokens live in httpOnly cookies, never in client state.
+- `lib/requireAuth.ts`: `requireUserId`/`requireUserIdFromServerCookies` gate any authenticated route/page; `requireRootUserId`/`requireRootUserIdFromServerCookies` additionally check `User.role === "root"` for the admin console.
+- On top of email verification there's a second gate: `User.approved`. A new admin can fully verify their OTP and still get `{ status: "pending_approval" }` back from login/verify-code until the root admin approves them at `/app/admin`. See README's "Root admin approval & support requests" section for the full flow.
+- The root admin isn't a normal signup — it's bootstrapped from `ADMIN_EMAIL`/`ADMIN_PASS` env vars via `lib/rootAdmin.ts`, re-upserted on every login attempt for that email so credential rotation needs no restart or seed script.
 
 ---
 
@@ -77,7 +80,18 @@ foundry/
 # .env.local — never commit this file
 DATABASE_URL="file:./dev.db"
 GEMINI_API_KEY="..."
-# Add others here
+
+# Gmail SMTP for OTP verification emails (App Password, not the account password)
+GMAIL_USER="..."
+GMAIL_APP_PASSWORD="..."
+
+# Root admin — the single privileged account that can approve/decline
+# pending admin signups and triage support requests. Changing either of
+# these takes effect on the next login attempt (no restart, no seed
+# script) — the row is upserted from these values inside the login route.
+# Required: without them, no account has approval powers.
+ADMIN_EMAIL="admin@test.com"
+ADMIN_PASS="admin1234"
 ```
 
 ---
@@ -104,8 +118,15 @@ npm run start
 ## Active / Recent Work (last session)
 
 - Working on branch `chatbot-form` (branched off `chatbot`, which holds the earlier auth/validation hardening work).
-- Built a structured "Add Employee" modal form (`components/chatbot/EmployeeForm.tsx`) to replace one-by-one chatbot data entry, wired into the chatbot's create-intent flow.
-- **Excel import/export — fully built this session**, see the "Excel import & export" section in `README.md`:
+- **Root admin approval system + support requests — built this session**, see the README's "Root admin approval & support requests" section for the full breakdown:
+  - Schema: `User.role` (`"admin"`|`"root"`), `User.approved` (default `false`, existing users backfilled to `true` so nobody got locked out), new `SupportRequest` model — migration `20260712232439_add_admin_approval_and_support`.
+  - `lib/rootAdmin.ts` bootstraps the one root account from `ADMIN_EMAIL`/`ADMIN_PASS` env vars, re-upserted on every login attempt for that email (no restart or seed script needed to rotate credentials).
+  - `login`/`verify-code` routes gate on `approved` after credentials/OTP succeed, returning `{ status: "pending_approval" }` instead of tokens; `AuthContext` persists that state to sessionStorage and routes to `/pending`.
+  - `/app/admin` (root-only, gated by `requireRootUserIdFromServerCookies`): approve/decline pending admins (decline **hard-deletes** the row so the email can re-register), view/resolve support requests.
+  - `components/shared/SupportRequestModal.tsx`, reachable from the sidebar ("Report an issue", any admin) and the `/pending` waiting screen (email locked) — submits via unauthenticated `POST /api/support-requests` so pending users without a cookie can still reach root.
+- **Branding + metadata + hover polish — also built this session**, see README's "Branding & page metadata" and "Hover / transition polish" sections: replaced the `faFire` gradient badge with `components/shared/Logo.tsx` (Wedy.AI mark) everywhere; every route now sets its own page title through `app/layout.tsx`'s title template instead of the default "Create Next App"; interactive elements across the app (nav links, stat cards, table rows, buttons) got hover/transition treatment, using component state instead of Tailwind `hover:` wherever an inline conditional `style` prop already controlled the same CSS property.
+- Earlier this session: built a structured "Add Employee" modal form (`components/chatbot/EmployeeForm.tsx`) to replace one-by-one chatbot data entry, wired into the chatbot's create-intent flow.
+- **Excel import/export**, see the "Excel import & export" section in `README.md`:
   - Single-employee: label-based parser (`lib/excelImport/singleEmployeeParser.ts`, robust to layout shifts — verified), Gemini classification of the template's free-text training lines into education/certificate (`classifyTraining.ts`), mapping into `EmployeeForm` pre-fill (`mapToFormData.ts`), multi-file upload with sequential review modals + drag-and-drop + welcome quick-action in the chatbot, and a template/export builder (`singleEmployeeTemplate.ts`, ExcelJS, styling mirrors the real ElSewedy template) round-tripping through the parser.
   - Batch: shared column config (`batchColumns.ts`), SheetJS parser (`batchParser.ts`), ExcelJS template/export (`batchTemplate.ts`), a review-table modal on the Records page (upload → per-row valid/error preview → select → import, partial-success reporting), and filtered/full export.
   - Schema additions: `Employee.companyID/hiringDate/position/age/yearsExpPrev/yearsExpElsewedy/totalExperience`, `Certificate.rawText`, new `PerformanceReview` model — `EmployeeForm` gained a 5th "Performance Reviews" relation section (percentage in the UI, fraction in the DB).
@@ -144,7 +165,9 @@ npm run start
 
 ## Notes for Next Session
 
-- Excel import/export (single-employee + batch) is done and verified end-to-end — see "Active / Recent Work" above and the README's "Excel import & export" section. Not a next-session task unless new issues turn up.
+- Root admin approval system + support requests is done and verified end-to-end (root login, approve, decline, pending-user login gate, support request submission from both an authed and a pending session) — see "Active / Recent Work" above and the README's "Root admin approval & support requests" section. Not a next-session task unless new issues turn up.
+- Branding/metadata/hover-polish pass is also done — see README's "Branding & page metadata" and "Hover / transition polish" sections.
+- Excel import/export (single-employee + batch) is done and verified end-to-end — see the README's "Excel import & export" section. Not a next-session task unless new issues turn up.
 - Known, intentionally-deferred gaps in batch import: no inline row-editing in the review table (fix in the sheet and re-upload), no volume/pagination handling for very large sheets.
-- Other long-standing, not-yet-actioned items (pre-date the Excel work, still true): the dead one-by-one `needsInfo` create flow left as unreachable code in `extract/route.ts`/`ChatbotView.tsx`; six pre-existing `react/no-unescaped-entities` ESLint errors in `ChatbotView.tsx`; chatbot rate-limiting (explicitly deprioritized); landing-page metadata bug (never explicitly requested to fix).
-- Check `git status` before starting new work — confirm whether this session's Excel-import work has been committed yet.
+- Other long-standing, not-yet-actioned items (pre-date this session, still true): Records page's filter UI (department/gender/nationality/marital/military) is still a stub, not wired to real filtering logic; the dead one-by-one `needsInfo` create flow left as unreachable code in `extract/route.ts`/`ChatbotView.tsx`; six pre-existing `react/no-unescaped-entities` ESLint errors in `ChatbotView.tsx`; chatbot rate-limiting (explicitly deprioritized); landing-page metadata bug (never explicitly requested to fix).
+- Check `git status` before starting new work — confirm whether this session's work has been committed yet.

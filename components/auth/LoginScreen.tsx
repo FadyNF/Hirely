@@ -16,13 +16,14 @@ import {
   faEnvelope,
 } from '@fortawesome/free-solid-svg-icons';
 import { useAuth } from '@/context';
+import Logo from '@/components/shared/Logo';
 
 interface LoginScreenProps {
   onSwitchToRegister: () => void;
 }
 
 export default function LoginScreen({ onSwitchToRegister }: LoginScreenProps) {
-  const { login, pendingVerification } = useAuth();
+  const { login, pendingVerification, pendingApproval } = useAuth();
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -43,6 +44,15 @@ export default function LoginScreen({ onSwitchToRegister }: LoginScreenProps) {
     }
   }, [pendingVerification, router]);
 
+  // Same idea for the approval-waiting state — if the user got as far as
+  // "OTP verified, waiting on root" and then landed back here, resume on
+  // the pending screen instead of asking them to log in from scratch.
+  useEffect(() => {
+    if (pendingApproval) {
+      router.replace('/pending');
+    }
+  }, [pendingApproval, router]);
+
   const isValid = email.trim().length > 3 && password.length > 0;
 
   const handleSubmit = async (e: FormEvent) => {
@@ -54,7 +64,14 @@ export default function LoginScreen({ onSwitchToRegister }: LoginScreenProps) {
     setIsLoading(true);
 
     try {
-      await login(email.trim(), password);
+      const outcome = await login(email.trim(), password);
+      // login() sets state via setPendingApproval before returning; the
+      // pendingApproval useEffect above will do the routing on the next
+      // render. Explicit push here is redundant but makes the navigation
+      // immediate rather than one render behind.
+      if (outcome.status === 'pending_approval') {
+        router.replace('/pending');
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Login failed. Please try again.';
       setError(message);
@@ -87,17 +104,9 @@ export default function LoginScreen({ onSwitchToRegister }: LoginScreenProps) {
       <div className="flex-1" />
 
       <div className="w-full max-w-md mx-4">
-        {/* Logo — a flame stands in for "Foundry" the same way a shield
-            represented "Radar.ai": something concrete tied to the name. */}
         <div className="text-center mb-8 animate-login-fade-in-up login-delay-1">
-          <div
-            className="inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-5"
-            style={{
-              background: 'linear-gradient(135deg, #B91C1C, #DC2626)',
-              boxShadow: '0 4px 16px rgba(185, 28, 28, 0.25)',
-            }}
-          >
-            <FontAwesomeIcon icon={faFire} className="text-white text-2xl" />
+          <div className="inline-flex items-center justify-center mb-5">
+            <Logo height={56} />
           </div>
           <h1 className="text-xl font-bold tracking-tight text-gray-800">Foundry</h1>
           <div className="login-underline-accent w-16 mx-auto mt-2.5 mb-2.5" />

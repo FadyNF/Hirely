@@ -445,7 +445,7 @@ export default function EmployeeForm({ initialData, onSubmit, onClose, progressL
 
   // ---- Render helpers ----
   const inputClass = (hasError: boolean) =>
-    `w-full rounded-lg border px-3 py-2 text-sm outline-none focus:ring-2 ${hasError ? 'ring-1' : ''}`;
+    `w-full rounded-lg border px-3 py-2 text-sm outline-none transition-shadow focus:ring-2 ${hasError ? 'ring-1' : ''}`;
   const inputStyle = (hasError: boolean) =>
     ({ borderColor: hasError ? COLORS.errorBorder : COLORS.border, color: COLORS.black }) as React.CSSProperties;
 
@@ -755,7 +755,7 @@ export default function EmployeeForm({ initialData, onSubmit, onClose, progressL
           <button
             onClick={handleSubmit}
             disabled={submitting}
-            className="text-sm font-semibold px-5 py-2 rounded-lg text-white flex items-center gap-2 transition-colors disabled:opacity-60"
+            className="text-sm font-semibold px-5 py-2 rounded-lg text-white flex items-center gap-2 transition-all hover:opacity-90 hover:shadow-md disabled:opacity-60 disabled:hover:opacity-60 disabled:hover:shadow-none"
             style={{ backgroundColor: COLORS.red }}
           >
             {submitting && <FontAwesomeIcon icon={faSpinner} className="animate-spin text-xs" />}

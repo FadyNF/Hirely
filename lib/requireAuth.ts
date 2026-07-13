@@ -51,3 +51,26 @@ export async function requireUserIdFromServerCookies(): Promise<number | null> {
   const store = await cookies();
   return verifyAccessToken(store.get(ACCESS_TOKEN_COOKIE)?.value);
 }
+
+// Root-only gate — same as requireUserId, but also verifies the resolved
+// user's role in the DB is "root". Returns null (treated as unauthorized)
+// if the user is a regular admin, even if their token is otherwise valid.
+// One DB round-trip per protected request; only used on the small handful
+// of root-only routes so the cost is bounded.
+export async function requireRootUserId(request: Request): Promise<number | null> {
+  const userId = requireUserId(request);
+  if (!userId) return null;
+  const { prisma } = await import("./prisma");
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+  return user?.role === "root" ? userId : null;
+}
+
+// Server-Component equivalent — same shape as requireUserIdFromServerCookies
+// so /app/admin/page.tsx can guard itself the same way /app/page.tsx does.
+export async function requireRootUserIdFromServerCookies(): Promise<number | null> {
+  const userId = await requireUserIdFromServerCookies();
+  if (!userId) return null;
+  const { prisma } = await import("./prisma");
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+  return user?.role === "root" ? userId : null;
+}

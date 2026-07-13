@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { sendVerificationEmail } from "@/lib/mailer";
 import { prisma } from "@/lib/prisma";
+import { isRootEmail } from "@/lib/rootAdmin";
 // ^ This path matches the "output" setting we saw in schema.prisma
 //   (generator client { output = "../lib/generated/prisma" }).
 //   Prisma writes its generated code there instead of node_modules,
@@ -34,6 +35,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: "Email and password are required." },
         { status: 400 } // 400 = "Bad Request" — the client sent something wrong
+      );
+    }
+
+    // The root admin's email is env-configured, not signup-registered —
+    // if someone tries to sign up using it, refuse rather than silently
+    // create a pending row that could never be approved (root approving
+    // themselves would be nonsense) and would collide with the root row
+    // the next time env-seed ran.
+    if (isRootEmail(email)) {
+      return NextResponse.json(
+        { error: "This email address is reserved. Please use a different one." },
+        { status: 409 }
       );
     }
 

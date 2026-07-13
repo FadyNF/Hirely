@@ -256,6 +256,7 @@ function EmployeeModal({
 }) {
     const [activeTab, setActiveTab] =
         useState<(typeof TABS)[number]["key"]>("basicInfo");
+    const [hoveredTab, setHoveredTab] = useState<(typeof TABS)[number]["key"] | null>(null);
     const { authFetch } = useAuth();
     const [exporting, setExporting] = useState(false);
 
@@ -351,8 +352,12 @@ function EmployeeModal({
                                 color:
                                     activeTab === tab.key
                                         ? COLORS.red
-                                        : COLORS.gray,
+                                        : hoveredTab === tab.key
+                                          ? COLORS.black
+                                          : COLORS.gray,
                             }}
+                            onMouseEnter={() => setHoveredTab(tab.key)}
+                            onMouseLeave={() => setHoveredTab(null)}
                         >
                             {tab.label}
                         </button>
@@ -424,7 +429,7 @@ function RecordsTable({
                     {employees.map((e) => (
                         <tr
                             key={e.id}
-                            className="border-b"
+                            className="border-b transition-colors hover:bg-gray-50"
                             style={{ borderColor: "#F3F4F6" }}
                         >
                             <td
@@ -647,7 +652,7 @@ export default function RecordsView({
                 <select
                     value={filters.workLocation}
                     onChange={(e) => setFilter("workLocation", e.target.value)}
-                    className="rounded-lg border px-2.5 py-1.5 text-xs outline-none"
+                    className="rounded-lg border px-2.5 py-1.5 text-xs outline-none transition-colors hover:border-gray-400 focus:ring-2"
                     style={{
                         borderColor: COLORS.border,
                         color: filters.workLocation
@@ -665,7 +670,7 @@ export default function RecordsView({
                 <select
                     value={filters.gender}
                     onChange={(e) => setFilter("gender", e.target.value)}
-                    className="rounded-lg border px-2.5 py-1.5 text-xs outline-none"
+                    className="rounded-lg border px-2.5 py-1.5 text-xs outline-none transition-colors hover:border-gray-400 focus:ring-2"
                     style={{
                         borderColor: COLORS.border,
                         color: filters.gender ? COLORS.black : COLORS.gray,
@@ -681,7 +686,7 @@ export default function RecordsView({
                 <select
                     value={filters.nationality}
                     onChange={(e) => setFilter("nationality", e.target.value)}
-                    className="rounded-lg border px-2.5 py-1.5 text-xs outline-none"
+                    className="rounded-lg border px-2.5 py-1.5 text-xs outline-none transition-colors hover:border-gray-400 focus:ring-2"
                     style={{
                         borderColor: COLORS.border,
                         color: filters.nationality ? COLORS.black : COLORS.gray,
@@ -694,11 +699,43 @@ export default function RecordsView({
                         </option>
                     ))}
                 </select>
+                <select
+                    value={filters.maritalStatus}
+                    onChange={(e) => setFilter("maritalStatus", e.target.value)}
+                    className="rounded-lg border px-2.5 py-1.5 text-xs outline-none transition-colors hover:border-gray-400 focus:ring-2"
+                    style={{
+                        borderColor: COLORS.border,
+                        color: filters.maritalStatus ? COLORS.black : COLORS.gray,
+                    }}
+                >
+                    <option value="">All marital statuses</option>
+                    {ENUM_OPTIONS.maritalStatus.map((m) => (
+                        <option key={m} value={m}>
+                            {m}
+                        </option>
+                    ))}
+                </select>
+                <select
+                    value={filters.militaryStatus}
+                    onChange={(e) => setFilter("militaryStatus", e.target.value)}
+                    className="rounded-lg border px-2.5 py-1.5 text-xs outline-none transition-colors hover:border-gray-400 focus:ring-2"
+                    style={{
+                        borderColor: COLORS.border,
+                        color: filters.militaryStatus ? COLORS.black : COLORS.gray,
+                    }}
+                >
+                    <option value="">All military statuses</option>
+                    {ENUM_OPTIONS.militaryStatus.map((m) => (
+                        <option key={m} value={m}>
+                            {m}
+                        </option>
+                    ))}
+                </select>
 
                 {hasActiveFilter && (
                     <button
                         onClick={clearFilters}
-                        className="text-xs underline underline-offset-2"
+                        className="text-xs underline underline-offset-2 transition-colors hover:text-red-800"
                         style={{ color: COLORS.red }}
                     >
                         Clear filters
