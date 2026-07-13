@@ -49,9 +49,9 @@ export async function sendVerificationEmail(to: string, code: string) {
   }
 
   await transporter.sendMail({
-    from: `Foundry <${process.env.GMAIL_USER}>`,
+    from: `Hirely <${process.env.GMAIL_USER}>`,
     to,
-    subject: "Your Foundry verification code",
+    subject: "Your Hirely verification code",
     html: `<p>Your verification code is: <strong>${code}</strong></p>
            <p>This code expires in 10 minutes.</p>`,
   });
@@ -77,10 +77,10 @@ export async function sendSupportResolvedEmail(to: string, subject: string, repl
     : `<p>No additional notes were left, but your request has been marked resolved.</p>`;
 
   await transporter.sendMail({
-    from: `Foundry <${process.env.GMAIL_USER}>`,
+    from: `Hirely <${process.env.GMAIL_USER}>`,
     to,
     subject: `Your request "${subject}" has been resolved`,
-    html: `<p>Your support request "<strong>${escapeHtml(subject)}</strong>" has been marked resolved by the Foundry admin team.</p>
+    html: `<p>Your support request "<strong>${escapeHtml(subject)}</strong>" has been marked resolved by the Hirely admin team.</p>
            ${replyHtml}`,
   });
 }
@@ -99,10 +99,10 @@ export async function sendApprovalEmail(to: string, magicLink: string) {
   }
 
   await transporter.sendMail({
-    from: `Foundry <${process.env.GMAIL_USER}>`,
+    from: `Hirely <${process.env.GMAIL_USER}>`,
     to,
-    subject: "You're approved — welcome to Foundry",
-    html: `<p>Your Foundry account has been approved by the admin team.</p>
+    subject: "You're approved — welcome to Hirely",
+    html: `<p>Your Hirely account has been approved by the admin team.</p>
            <p><a href="${magicLink}">Click here to sign in</a> — this link logs you in directly and expires in 24 hours.</p>
            <p>If the link has expired, just sign in normally with your email and password.</p>`,
   });

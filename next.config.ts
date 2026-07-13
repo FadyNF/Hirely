@@ -12,7 +12,7 @@ const nextConfig: NextConfig = {
       beforeFiles: [
         {
           source: "/",
-          destination: "/Foundry_Landing_Page.html",
+          destination: "/Hirely_Landing_Page.html",
         },
       ],
     };

@@ -15,8 +15,8 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
     title: {
-        default: "Foundry — HR Employee Data Platform",
-        template: "%s · Foundry",
+        default: "Hirely — HR Employee Data Platform",
+        template: "%s · Hirely",
     },
     description: "Employee data management and validation for ElSewedy Electric — records, a chatbot assistant, and Excel import/export, all in one place.",
 };

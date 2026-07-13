@@ -7,7 +7,7 @@ import { useEffect } from 'react';
  *
  * At runtime this component is normally NOT rendered: the "beforeFiles"
  * rewrite in next.config.ts serves the static marketing landing page
- * (public/Foundry_Landing_Page.html) at "/" directly. This file exists so
+ * (public/Hirely_Landing_Page.html) at "/" directly. This file exists so
  * Next.js's bundler always has a real "/" endpoint to build against —
  * without it, having no page.tsx at the root confuses the bundler.
  *
@@ -17,7 +17,7 @@ import { useEffect } from 'react';
  */
 export default function RootPage() {
   useEffect(() => {
-    window.location.replace('/Foundry_Landing_Page.html');
+    window.location.replace('/Hirely_Landing_Page.html');
   }, []);
   return null;
 }

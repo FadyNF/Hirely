@@ -90,7 +90,7 @@ function writeRow(ws: ExcelJS.Worksheet, rowIndex: number, values: Record<string
 
 export function buildBatchTemplateWorkbook(): ExcelJS.Workbook {
   const wb = new ExcelJS.Workbook();
-  wb.creator = "Foundry";
+  wb.creator = "Hirely";
   const ws = wb.addWorksheet("Employees");
   writeHeader(ws);
 
@@ -121,7 +121,7 @@ export function buildBatchTemplateWorkbook(): ExcelJS.Workbook {
 
 export function buildBatchExportWorkbook(employees: EmployeeWorkbookData[]): ExcelJS.Workbook {
   const wb = new ExcelJS.Workbook();
-  wb.creator = "Foundry";
+  wb.creator = "Hirely";
   const ws = wb.addWorksheet("Employees");
   writeHeader(ws);
   employees.forEach((emp, i) => {

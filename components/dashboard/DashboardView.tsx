@@ -23,7 +23,7 @@ import type {
     FieldGap,
     TopIssue,
     RecordStatusBreakdown,
-    CompletionBucket,
+    JobMatchingStats,
     FlaggedField,
 } from "@/lib/employeeStats";
 
@@ -254,60 +254,51 @@ function RecordStatusBar({ status }: { status: RecordStatusBreakdown }) {
     );
 }
 
-// Same visual shape as a KPI trend chart, but since there's only one live
-// snapshot (no historical data to plot a trend over time), it shows the
-// distribution of employees across completeness bands instead — the
-// "shape" of the data problem rather than a shape over time.
-function CompletionDistributionChart({
-    buckets,
-}: {
-    buckets: CompletionBucket[];
-}) {
+function JobMatchingCard({ stats }: { stats: JobMatchingStats }) {
+    const syncPct = stats.totalProfiles > 0
+        ? Math.round((stats.profilesSynced / stats.totalProfiles) * 100)
+        : 0;
     return (
-        <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={buckets} margin={{ left: 0, right: 10, top: 10 }}>
-                <CartesianGrid
-                    strokeDasharray="3 3"
-                    vertical={false}
-                    stroke={COLORS.border}
-                />
-                <XAxis
-                    dataKey="label"
-                    tick={{ fontSize: 12, fill: COLORS.gray }}
-                    axisLine={{ stroke: COLORS.border }}
-                    tickLine={false}
-                />
-                <YAxis
-                    allowDecimals={false}
-                    tick={{ fontSize: 12, fill: COLORS.gray }}
-                    axisLine={false}
-                    tickLine={false}
-                />
-                <Tooltip
-                    formatter={(value) => [
-                        `${Array.isArray(value) ? value[0] : (value ?? 0)} employees`,
-                        "",
-                    ]}
-                    contentStyle={{
-                        fontSize: 12,
-                        borderRadius: 8,
-                        borderColor: COLORS.border,
-                    }}
-                />
-                <Bar dataKey="count" radius={[6, 6, 0, 0]} barSize={36}>
-                    {buckets.map((b, i) => (
-                        <Cell
-                            key={i}
-                            fill={
-                                i === buckets.length - 1
-                                    ? "#10B981"
-                                    : gapColor(100 - (i * 20 + 10))
-                            }
-                        />
-                    ))}
-                </Bar>
-            </BarChart>
-        </ResponsiveContainer>
+        <div className="flex flex-col justify-between h-full gap-5">
+            <div className="grid grid-cols-2 gap-4">
+                <div
+                    className="rounded-lg border p-4"
+                    style={{ borderColor: COLORS.border }}
+                >
+                    <p className="text-xs mb-1" style={{ color: COLORS.gray }}>
+                        Profiles synced
+                    </p>
+                    <p className="text-2xl font-bold" style={{ color: COLORS.black }}>
+                        {stats.profilesSynced}
+                        <span className="text-sm font-normal" style={{ color: COLORS.gray }}>
+                            {" "}/ {stats.totalProfiles}
+                        </span>
+                    </p>
+                </div>
+                <div
+                    className="rounded-lg border p-4"
+                    style={{ borderColor: COLORS.border }}
+                >
+                    <p className="text-xs mb-1" style={{ color: COLORS.gray }}>
+                        Sync coverage
+                    </p>
+                    <p
+                        className="text-2xl font-bold"
+                        style={{ color: syncPct === 100 ? "#10B981" : COLORS.red }}
+                    >
+                        {syncPct}%
+                    </p>
+                </div>
+            </div>
+
+            <a
+                href="/app/matching"
+                className="block text-center text-sm font-semibold py-2.5 rounded-lg text-white transition-all duration-200 hover:shadow-md"
+                style={{ background: COLORS.red }}
+            >
+                Go to Job Matching
+            </a>
+        </div>
     );
 }
 
@@ -687,12 +678,10 @@ export default function DashboardView({ data }: { data: DashboardData }) {
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                 <div className="lg:col-span-2">
                     <SectionCard
-                        title="Completeness distribution"
-                        subtitle="How many employees fall into each completeness band"
+                        title="Job Matching"
+                        subtitle="AI-powered employee-to-job matching status"
                     >
-                        <CompletionDistributionChart
-                            buckets={data.completionDistribution}
-                        />
+                        <JobMatchingCard stats={data.jobMatchingStats} />
                     </SectionCard>
                 </div>
                 <SectionCard

@@ -120,7 +120,7 @@ export default function LoginScreen({ onSwitchToRegister }: LoginScreenProps) {
           <div className="inline-flex items-center justify-center mb-5">
             <Logo height={56} />
           </div>
-          <h1 className="text-xl font-bold tracking-tight text-gray-800">Foundry</h1>
+          <h1 className="text-xl font-bold tracking-tight text-gray-800">Hirely</h1>
           <div className="login-underline-accent w-16 mx-auto mt-2.5 mb-2.5" />
           <p className="text-xs font-medium uppercase text-gray-500" style={{ letterSpacing: '0.15em' }}>
             by Elsewedy Electric
@@ -222,7 +222,7 @@ export default function LoginScreen({ onSwitchToRegister }: LoginScreenProps) {
               className="login-btn w-full py-3 rounded-lg text-white text-sm font-semibold tracking-wide flex items-center justify-center gap-2"
               style={{ borderRadius: '8px' }}
               disabled={!isValid || isLoading}
-              aria-label="Login to Foundry"
+              aria-label="Login to Hirely"
             >
               {isLoading ? (
                 <>
@@ -277,7 +277,7 @@ export default function LoginScreen({ onSwitchToRegister }: LoginScreenProps) {
           <span className="text-xs font-semibold text-gray-800">Elsewedy Electric</span>
         </div>
         <p className="text-[11px] text-gray-500">
-          &copy; 2026 Foundry. All rights reserved.
+          &copy; 2026 Hirely. All rights reserved.
         </p>
       </footer>
     </div>

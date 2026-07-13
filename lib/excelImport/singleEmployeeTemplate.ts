@@ -115,7 +115,7 @@ function labelValue(ws: ExcelJS.Worksheet, row: number, label: string, value: un
 
 export function buildSingleEmployeeWorkbook(emp?: EmployeeWorkbookData): ExcelJS.Workbook {
   const wb = new ExcelJS.Workbook();
-  wb.creator = "Foundry";
+  wb.creator = "Hirely";
   const ws = wb.addWorksheet("ETP");
 
   ws.getColumn(1).width = 3; // A — spacer, matches the original's left margin

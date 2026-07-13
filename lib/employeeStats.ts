@@ -41,10 +41,11 @@ export interface RecordStatusBreakdown {
   incomplete: { count: number; percent: number };
 }
 
-export interface CompletionBucket {
-  label: string;
-  count: number;
+export interface JobMatchingStats {
+  totalProfiles: number;
+  profilesSynced: number;
 }
+
 
 // A value the batch importer couldn't confidently accept and wrote anyway
 // (see prisma/schema.prisma's ReviewFlag model and lib/chatbotValidate.ts) —
@@ -68,7 +69,7 @@ export interface DashboardData {
   tabOverview: TabOverviewRow[];
   topIssues: TopIssue[];
   recordStatus: RecordStatusBreakdown;
-  completionDistribution: CompletionBucket[];
+  jobMatchingStats: JobMatchingStats;
   flaggedFields: FlaggedField[];
 }
 
@@ -201,19 +202,15 @@ function computeRecordStatus(employees: EmployeeWithRelations[]): RecordStatusBr
 // Buckets employees by overall basic-info completeness %, giving the
 // "shape" of the data quality problem the way a histogram shows the shape
 // of any distribution — how many people are almost done vs. barely started.
-function computeCompletionDistribution(employees: EmployeeWithRelations[]): CompletionBucket[] {
-  const totalFields = BASIC_INFO_FIELDS.length;
-  const bucketLabels = ["0–19%", "20–39%", "40–59%", "60–79%", "80–99%", "100%"];
-  const counts = new Array(bucketLabels.length).fill(0);
-
-  for (const e of employees) {
-    const missing = getMissingFields(e).length;
-    const completePercent = totalFields ? Math.round(((totalFields - missing) / totalFields) * 100) : 0;
-    if (completePercent >= 100) counts[5] += 1;
-    else counts[Math.min(Math.floor(completePercent / 20), 4)] += 1;
-  }
-
-  return bucketLabels.map((label, i) => ({ label, count: counts[i] }));
+async function computeJobMatchingStats(totalEmployees: number): Promise<JobMatchingStats> {
+  const synced = await prisma.$queryRaw<{ cnt: bigint | number }[]>`
+    SELECT COUNT(*) as cnt FROM "EmployeeEmbedding"
+    WHERE "embedding" IS NOT NULL AND "embedding" != '[]' AND "embedding" != ''
+  `;
+  return {
+    totalProfiles: totalEmployees,
+    profilesSynced: Number(synced[0]?.cnt ?? 0),
+  };
 }
 
 // ReviewFlag.field is either a bare Employee column name ("email") or
@@ -259,7 +256,7 @@ export async function getDashboardData(): Promise<DashboardData> {
   const skills = computeSkillsStats(employees);
   const topIssues = computeTopIssues(basicInfo, multiTabs, skills);
   const recordStatus = computeRecordStatus(employees);
-  const completionDistribution = computeCompletionDistribution(employees);
+  const jobMatchingStats = await computeJobMatchingStats(employees.length);
 
   const tabOverview: TabOverviewRow[] = [
     { key: "basicInfo", label: "Basic Info", overallGap: basicInfo.overallGap, reviewCount: reviewCountByTab.basicInfo ?? 0 },
@@ -293,7 +290,7 @@ export async function getDashboardData(): Promise<DashboardData> {
     tabOverview,
     topIssues,
     recordStatus,
-    completionDistribution,
+    jobMatchingStats,
     flaggedFields,
   };
 }

@@ -547,8 +547,6 @@ const EMPTY_FILTERS = {
     workLocation: "",
     gender: "",
     nationality: "",
-    maritalStatus: "",
-    militaryStatus: "",
 };
 type RecordsFilters = typeof EMPTY_FILTERS;
 
@@ -612,10 +610,6 @@ export default function RecordsView({
             if (filters.gender) params.set("gender", filters.gender);
             if (filters.nationality)
                 params.set("nationality", filters.nationality);
-            if (filters.maritalStatus)
-                params.set("maritalStatus", filters.maritalStatus);
-            if (filters.militaryStatus)
-                params.set("militaryStatus", filters.militaryStatus);
             const qs = params.toString();
             await downloadFromRoute(
                 authFetch,
@@ -638,13 +632,6 @@ export default function RecordsView({
             return false;
         if (filters.gender && e.gender !== filters.gender) return false;
         if (filters.nationality && e.nationality !== filters.nationality)
-            return false;
-        if (filters.maritalStatus && e.maritalStatus !== filters.maritalStatus)
-            return false;
-        if (
-            filters.militaryStatus &&
-            e.militaryStatus !== filters.militaryStatus
-        )
             return false;
         return true;
     });
@@ -833,39 +820,6 @@ export default function RecordsView({
                         </option>
                     ))}
                 </select>
-                <select
-                    value={filters.maritalStatus}
-                    onChange={(e) => setFilter("maritalStatus", e.target.value)}
-                    className="rounded-lg border px-2.5 py-1.5 text-xs outline-none transition-colors hover:border-gray-400 focus:ring-2"
-                    style={{
-                        borderColor: COLORS.border,
-                        color: filters.maritalStatus ? COLORS.black : COLORS.gray,
-                    }}
-                >
-                    <option value="">All marital statuses</option>
-                    {ENUM_OPTIONS.maritalStatus.map((m) => (
-                        <option key={m} value={m}>
-                            {m}
-                        </option>
-                    ))}
-                </select>
-                <select
-                    value={filters.militaryStatus}
-                    onChange={(e) => setFilter("militaryStatus", e.target.value)}
-                    className="rounded-lg border px-2.5 py-1.5 text-xs outline-none transition-colors hover:border-gray-400 focus:ring-2"
-                    style={{
-                        borderColor: COLORS.border,
-                        color: filters.militaryStatus ? COLORS.black : COLORS.gray,
-                    }}
-                >
-                    <option value="">All military statuses</option>
-                    {ENUM_OPTIONS.militaryStatus.map((m) => (
-                        <option key={m} value={m}>
-                            {m}
-                        </option>
-                    ))}
-                </select>
-
                 {hasActiveFilter && (
                     <button
                         onClick={clearFilters}

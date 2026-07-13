@@ -104,7 +104,7 @@ export default function Sidebar() {
       <div className="flex items-center justify-between px-4 py-4 border-b" style={{ borderColor: '#E5E5E5' }}>
         <div className="flex items-center gap-2 overflow-hidden">
           <Logo height={28} className="shrink-0" />
-          {!collapsed && <span className="font-bold text-gray-800 truncate">Foundry</span>}
+          {!collapsed && <span className="font-bold text-gray-800 truncate">Hirely</span>}
         </div>
         <button
           onClick={() => setCollapsed((c) => !c)}

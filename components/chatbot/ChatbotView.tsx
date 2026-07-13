@@ -1223,7 +1223,7 @@ export default function ChatbotView() {
         </div>
         {!showWelcome && (
           <p className="text-xs text-gray-400 text-center mt-3">
-            Foundry Assistant can make mistakes. Please verify important information.
+            Hirely Assistant can make mistakes. Please verify important information.
           </p>
         )}
       </div>
@@ -1279,10 +1279,7 @@ export default function ChatbotView() {
         <div className="flex-1 flex flex-col items-center justify-center px-4 md:px-8 pb-20 overflow-y-auto">
           <div className="w-full max-w-2xl mx-auto">
             <div className="text-center mb-10 animate-fade-in">
-              <div className="flex items-center justify-center mx-auto mb-6">
-                <Logo height={72} />
-              </div>
-              <h1 className="text-3xl md:text-4xl font-bold text-gray-900 mb-3">Foundry</h1>
+              <h1 className="text-3xl md:text-4xl font-bold text-gray-900 mb-3">Hirely</h1>
               <p className="text-gray-500 text-lg">
                 Create, update, and look up employee records — just by chatting
               </p>
@@ -1298,12 +1295,12 @@ export default function ChatbotView() {
                   </button>
                 ))}
               </div>
-              <button
+              {/* <button
                 onClick={handleDownloadTemplate}
                 className="mt-4 text-xs text-gray-400 hover:text-gray-600 underline underline-offset-2 transition-colors"
               >
                 Download a blank Excel template to fill in
-              </button>
+              </button> */}
             </div>
             <div className="mt-10">{renderInputArea()}</div>
           </div>

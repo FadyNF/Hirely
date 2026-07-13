@@ -1,5 +1,5 @@
 // ─── Palette Tokens ─────────────────────────────────────────────
-// Every color Foundry uses lives here, named by what it represents,
+// Every color Hirely uses lives here, named by what it represents,
 // not by what it looks like. If the brand color ever changes, this
 // is the ONLY file that needs editing — every component just
 // references PALETTE.brandRed, never the hex code directly.
