@@ -306,6 +306,25 @@ export function validateGpaValue(scale: GpaScale, rawValue: number): FieldValida
   return { valid: true, normalized: `${rawValue}/${cfg.denom} (${cfg.name})` };
 }
 
+// The reverse of validateGpaValue's `normalized` output — needed when
+// EmployeeForm pre-fills from an EXISTING record (Records' "Edit" action)
+// rather than fresh extraction/import, since a saved gpa is already the
+// tagged string, not a bare number + separate scale. Falls back to
+// scale "other" for anything that doesn't match the tagged format (e.g.
+// legacy/pre-tagging data saved as a bare number) rather than leaving the
+// scale unset — an unset scale blocks saving ANY unrelated edit to that
+// employee with "Select a GPA scale," even though the admin never touched
+// this field. Defaulting to "other" (the widest range) surfaces the value
+// for the admin to confirm/correct instead, and never silently drops it.
+export function parseGpaValue(stored: string): { value: string; scale: GpaScale } {
+  const match = stored.trim().match(/^(-?\d+(?:\.\d+)?)\/(?:4\.0|100)\s*\((American|German|Other)\)$/);
+  if (match) {
+    const scale = (Object.entries(GPA_SCALES).find(([, cfg]) => cfg.name === match[2])?.[0] ?? "other") as GpaScale;
+    return { value: match[1], scale };
+  }
+  return { value: stored, scale: "other" };
+}
+
 // The lenient fallback for GPA arriving as a bare number from natural-
 // language extraction (an update mentioned in chat, not the create form) —
 // Gemini has no scale dropdown to draw from, so there's no way to know

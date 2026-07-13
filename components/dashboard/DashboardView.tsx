@@ -8,7 +8,6 @@
 // this component as props; this file does zero data-fetching or math.
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import {
     BarChart,
     Bar,
@@ -25,10 +24,8 @@ import type {
     TopIssue,
     RecordStatusBreakdown,
     CompletionBucket,
-    AttentionEmployee,
     FlaggedField,
 } from "@/lib/employeeStats";
-import { useAuth } from "@/context/AuthContext";
 
 const COLORS = {
     red: "#DC2626",
@@ -314,84 +311,6 @@ function CompletionDistributionChart({
     );
 }
 
-// The most actionable piece of the page: real people, ranked by how many
-// basic-info fields they're missing, in the spirit of the "List Employee"
-// table — but built for triage instead of a general directory.
-function AttentionTable({ employees }: { employees: AttentionEmployee[] }) {
-    if (employees.length === 0) {
-        return (
-            <p className="text-sm" style={{ color: COLORS.gray }}>
-                Every employee has complete basic info.
-            </p>
-        );
-    }
-    return (
-        <div className="overflow-x-auto -mx-2">
-            <table className="w-full text-sm">
-                <thead>
-                    <tr className="text-left" style={{ color: COLORS.gray }}>
-                        <th className="font-medium px-2 pb-2">Name</th>
-                        <th className="font-medium px-2 pb-2">Company ID</th>
-                        <th className="font-medium px-2 pb-2">Department</th>
-                        <th className="font-medium px-2 pb-2">Position</th>
-                        <th className="font-medium px-2 pb-2">
-                            Missing fields
-                        </th>
-                    </tr>
-                </thead>
-                <tbody
-                    className="divide-y"
-                    style={{ borderColor: COLORS.border }}
-                >
-                    {employees.map((e) => (
-                        <tr key={e.companyID + e.fullName} className="transition-colors hover:bg-gray-50">
-                            <td
-                                className="px-2 py-2.5"
-                                style={{ color: COLORS.black }}
-                            >
-                                {e.fullName}
-                            </td>
-                            <td
-                                className="px-2 py-2.5"
-                                style={{ color: COLORS.gray }}
-                            >
-                                {e.companyID}
-                            </td>
-                            <td
-                                className="px-2 py-2.5"
-                                style={{ color: COLORS.gray }}
-                            >
-                                {e.department}
-                            </td>
-                            <td
-                                className="px-2 py-2.5"
-                                style={{ color: COLORS.gray }}
-                            >
-                                {e.position}
-                            </td>
-                            <td className="px-2 py-2.5">
-                                <span
-                                    className="text-xs font-semibold rounded-full px-2 py-0.5"
-                                    style={{
-                                        backgroundColor: COLORS.pinkBg,
-                                        color: gapColor(
-                                            (e.missingCount / e.totalFields) *
-                                                100,
-                                        ),
-                                    }}
-                                    title={e.missingFields.join(", ")}
-                                >
-                                    {e.missingCount} of {e.totalFields}
-                                </span>
-                            </td>
-                        </tr>
-                    ))}
-                </tbody>
-            </table>
-        </div>
-    );
-}
-
 function GapBarChart({ data }: { data: FieldGap[] }) {
     const sorted = [...data].sort((a, b) => b.gapPercent - a.gapPercent);
     return (
@@ -666,21 +585,11 @@ function humanizeReviewField(field: string): string {
 
 // The batch importer never drops an invalid value — it writes it as-is and
 // records why here, so admins fix real records instead of losing them.
+// "Edit" opens the employee record straight into edit mode on that field's
+// tab (see RecordsView's ?edit=/&flagId= handling) — saving there resolves
+// this flag automatically, which is why there's no separate "Mark
+// reviewed" action anymore: fixing the value IS reviewing it.
 function FlaggedFieldsList({ flags }: { flags: FlaggedField[] }) {
-    const { authFetch } = useAuth();
-    const router = useRouter();
-    const [resolvingId, setResolvingId] = useState<number | null>(null);
-
-    const resolve = async (id: number) => {
-        setResolvingId(id);
-        try {
-            const res = await authFetch(`/api/review-flags/${id}`, { method: "PATCH" });
-            if (res.ok) router.refresh();
-        } finally {
-            setResolvingId(null);
-        }
-    };
-
     if (flags.length === 0) {
         return (
             <p className="text-sm" style={{ color: COLORS.gray }}>
@@ -710,20 +619,12 @@ function FlaggedFieldsList({ flags }: { flags: FlaggedField[] }) {
                         </p>
                     </div>
                     <a
-                        href={`/app/records?highlight=${flag.employeeId}`}
-                        className="text-xs font-medium shrink-0 underline underline-offset-2 transition-colors hover:text-red-800"
-                        style={{ color: COLORS.red }}
-                    >
-                        View record
-                    </a>
-                    <button
-                        onClick={() => resolve(flag.id)}
-                        disabled={resolvingId === flag.id}
-                        className="text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors hover:bg-gray-50 disabled:opacity-50 shrink-0"
+                        href={`/app/records?edit=${flag.employeeId}&flagId=${flag.id}`}
+                        className="text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors hover:bg-gray-50 shrink-0"
                         style={{ borderColor: COLORS.border, color: COLORS.black }}
                     >
-                        {resolvingId === flag.id ? "…" : "Mark reviewed"}
-                    </button>
+                        Edit
+                    </a>
                 </div>
             ))}
         </div>
@@ -803,6 +704,13 @@ export default function DashboardView({ data }: { data: DashboardData }) {
             </div>
 
             <SectionCard
+                title="Flagged for review"
+                subtitle="Fields the validator couldn't confidently accept or reject"
+            >
+                <FlaggedFieldsList flags={data.flaggedFields} />
+            </SectionCard>
+
+            <SectionCard
                 title="Top issues"
                 subtitle="Worst fields across every tab, ranked — click one to jump to it"
             >
@@ -810,13 +718,6 @@ export default function DashboardView({ data }: { data: DashboardData }) {
                     issues={data.topIssues}
                     onJump={handleJumpToArea}
                 />
-            </SectionCard>
-
-            <SectionCard
-                title="Employees needing attention"
-                subtitle="Ranked by number of missing basic-info fields"
-            >
-                <AttentionTable employees={data.attentionNeeded} />
             </SectionCard>
 
             <SectionCard
@@ -829,13 +730,6 @@ export default function DashboardView({ data }: { data: DashboardData }) {
                     onToggle={handleToggle}
                     data={data}
                 />
-            </SectionCard>
-
-            <SectionCard
-                title="Flagged for review"
-                subtitle="Fields the validator couldn't confidently accept or reject"
-            >
-                <FlaggedFieldsList flags={data.flaggedFields} />
             </SectionCard>
         </div>
     );

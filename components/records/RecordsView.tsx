@@ -8,17 +8,20 @@
 // no randomization on reload — the same 20 seeded employees every time.
 
 import { useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
     BASIC_INFO_FIELDS,
     BASIC_INFO_LABELS,
+    OPTIONAL_INFO_FIELDS,
+    OPTIONAL_INFO_LABELS,
     MULTI_TAB_CONFIG,
     SKILL_CATEGORIES,
 } from "@/lib/tabConfig";
 import type { SerializedEmployee } from "@/lib/employees";
 import { useAuth } from "@/context/AuthContext";
-import { ENUM_OPTIONS } from "@/lib/chatbotValidate";
+import { ENUM_OPTIONS, parseGpaValue } from "@/lib/chatbotValidate";
 import BatchImportModal from "@/components/shared/BatchImportModal";
+import EmployeeForm, { type BuiltEmployeeData, type SubmitResult } from "@/components/shared/EmployeeForm";
 
 // Triggers a browser download from an auth-gated route (authFetch handles
 // the cookie + 401 refresh; a plain <a href> would skip the retry).
@@ -147,13 +150,75 @@ function SkillPill({
 // ---- Modal detail renderers, one per tab type ----
 
 function BasicInfoDetail({ employee }: { employee: SerializedEmployee }) {
+    // Additional Info fields are only ever populated via Excel import (see
+    // OPTIONAL_INFO_FIELDS in tabConfig.ts) — shown as a second block below
+    // the required basics, same grouping EmployeeForm uses, rather than a
+    // separate tab, since it's a small handful of fields, not a whole
+    // relation.
+    const hasAnyOptional = OPTIONAL_INFO_FIELDS.some((f) => {
+        const v = employee[f];
+        return v !== null && v !== undefined && v !== "";
+    });
     return (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8">
-            {BASIC_INFO_FIELDS.map((field) => (
-                <FieldRow
-                    key={field}
-                    label={BASIC_INFO_LABELS[field]}
-                    value={employee[field]}
+        <div className="space-y-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8">
+                {BASIC_INFO_FIELDS.map((field) => (
+                    <FieldRow
+                        key={field}
+                        label={BASIC_INFO_LABELS[field]}
+                        value={employee[field]}
+                    />
+                ))}
+            </div>
+            {hasAnyOptional && (
+                <div>
+                    <p
+                        className="text-xs font-medium mb-2 uppercase tracking-wide"
+                        style={{ color: COLORS.gray, letterSpacing: "0.05em" }}
+                    >
+                        Additional Info
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8">
+                        {OPTIONAL_INFO_FIELDS.map((field) => (
+                            <FieldRow
+                                key={field}
+                                label={OPTIONAL_INFO_LABELS[field]}
+                                value={employee[field] as string | number | null}
+                            />
+                        ))}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+function PerformanceDetail({ employee }: { employee: SerializedEmployee }) {
+    const entries = employee.performanceReviews;
+    if (entries.length === 0) {
+        return (
+            <p className="text-sm py-4" style={{ color: COLORS.gray }}>
+                No performance reviews on record.
+            </p>
+        );
+    }
+    const fields = [
+        { key: "quarter", label: "Quarter" },
+        { key: "year", label: "Year" },
+        { key: "score", label: "Score" },
+    ];
+    return (
+        <div>
+            {entries.map((entry, i) => (
+                <EntryCard
+                    key={entry.id}
+                    fields={fields}
+                    // Stored as a 0-1 fraction — shown as the percentage the
+                    // admin actually entered (same conversion EmployeeForm
+                    // does at submit time, in reverse).
+                    entry={{ ...entry, score: `${Math.round(entry.score * 100)}%` }}
+                    index={i}
+                    label="Performance review"
                 />
             ))}
         </div>
@@ -380,12 +445,7 @@ function EmployeeModal({
                         <SkillsDetail employee={employee} />
                     )}
                     {activeTab === "performance" && (
-                        <p
-                            className="text-sm py-4"
-                            style={{ color: COLORS.gray }}
-                        >
-                            No data recorded for this tab yet.
-                        </p>
+                        <PerformanceDetail employee={employee} />
                     )}
                 </div>
             </div>
@@ -498,6 +558,7 @@ export default function RecordsView({
     employees: SerializedEmployee[];
 }) {
     const { authFetch } = useAuth();
+    const router = useRouter();
     const searchParams = useSearchParams();
     const [query, setQuery] = useState("");
     const [filters, setFilters] = useState<RecordsFilters>(EMPTY_FILTERS);
@@ -510,6 +571,18 @@ export default function RecordsView({
             return highlight ? Number(highlight) : null;
         },
     );
+    // A second, separate deep link — also from "Flagged for review", but for
+    // "Edit" specifically (?edit=id&flagId=n): opens the full edit form
+    // instead of the read-only detail modal, and remembers which flag to
+    // auto-resolve once the save succeeds.
+    const [editEmployeeId, setEditEmployeeId] = useState<number | null>(() => {
+        const edit = searchParams.get("edit");
+        return edit ? Number(edit) : null;
+    });
+    const [editFlagId] = useState<number | null>(() => {
+        const flagId = searchParams.get("flagId");
+        return flagId ? Number(flagId) : null;
+    });
     const [batchOpen, setBatchOpen] = useState(false);
     const [exporting, setExporting] = useState(false);
 
@@ -598,6 +671,67 @@ export default function RecordsView({
     };
 
     const modalEmployee = employees.find((e) => e.id === modalEmployeeId);
+
+    const editEmployee = employees.find((e) => e.id === editEmployeeId);
+    // EmployeeForm displays/edits performanceReviews.score as a 0-100
+    // percentage (see components/shared/EmployeeForm.tsx); the DB stores
+    // it as a 0-1 fraction — converted here on the way in, the same
+    // conversion lib/excelImport/mapToFormData.ts does for Excel prefill.
+    const editInitialData = editEmployee
+        ? {
+              ...editEmployee,
+              performanceReviews: editEmployee.performanceReviews.map((p) => ({
+                  ...p,
+                  score: Math.round(p.score * 100),
+              })),
+              // A saved gpa is already the tagged string ("2.5/4.0
+              // (American)") EmployeeForm's dropdown+number pair produces
+              // on submit — split it back into both, or every unrelated
+              // edit to this employee gets blocked by "Select a GPA
+              // scale" for a field the admin never touched.
+              education: editEmployee.education.map((e) => {
+                  if (!e.gpa) return e;
+                  const { value, scale } = parseGpaValue(e.gpa);
+                  return { ...e, gpa: value, gpaScale: scale };
+              }),
+          }
+        : undefined;
+
+    const handleEditSubmit = async (
+        data: BuiltEmployeeData,
+    ): Promise<SubmitResult> => {
+        const res = await authFetch("/api/chatbot/commit", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                action: "update",
+                employeeId: editEmployeeId,
+                data,
+                replaceRelations: true,
+                resolveFlagId: editFlagId,
+            }),
+        });
+        const result = await res.json();
+
+        if (res.ok) {
+            setEditEmployeeId(null);
+            router.refresh();
+            return { ok: true };
+        }
+        if (res.status === 409 && result.field) {
+            return {
+                ok: false,
+                fieldError: {
+                    field: result.field,
+                    message: result.error || "That value already exists.",
+                },
+            };
+        }
+        return {
+            ok: false,
+            error: result.error || "Something went wrong saving that.",
+        };
+    };
 
     return (
         <div className="p-8 space-y-4">
@@ -791,6 +925,16 @@ export default function RecordsView({
                 <EmployeeModal
                     employee={modalEmployee}
                     onClose={() => setModalEmployeeId(null)}
+                />
+            )}
+            {editEmployee && (
+                <EmployeeForm
+                    initialData={editInitialData}
+                    onSubmit={handleEditSubmit}
+                    onClose={() => setEditEmployeeId(null)}
+                    title={`Edit ${editEmployee.fullName}`}
+                    subtitle="Update the fields below — existing entries are replaced with whatever's here when you save."
+                    submitLabel="Save changes"
                 />
             )}
             {batchOpen && (

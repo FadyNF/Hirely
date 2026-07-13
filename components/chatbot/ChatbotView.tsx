@@ -23,7 +23,7 @@ import {
 } from '@fortawesome/free-solid-svg-icons';
 import { BASIC_INFO_FIELDS, BASIC_INFO_LABELS } from '@/lib/tabConfig';
 import { useAuth } from '@/context/AuthContext';
-import EmployeeForm, { type BuiltEmployeeData, type SubmitResult } from './EmployeeForm';
+import EmployeeForm, { type BuiltEmployeeData, type SubmitResult } from '@/components/shared/EmployeeForm';
 import BatchImportModal from '@/components/shared/BatchImportModal';
 import Logo from '@/components/shared/Logo';
 

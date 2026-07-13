@@ -46,18 +46,6 @@ export interface CompletionBucket {
   count: number;
 }
 
-// A real, ranked "who needs attention" list — the most actionable piece
-// of the dashboard, since it names people instead of just percentages.
-export interface AttentionEmployee {
-  fullName: string;
-  companyID: string;
-  department: string;
-  position: string;
-  missingCount: number;
-  totalFields: number;
-  missingFields: string[];
-}
-
 // A value the batch importer couldn't confidently accept and wrote anyway
 // (see prisma/schema.prisma's ReviewFlag model and lib/chatbotValidate.ts) —
 // surfaced here so the admin can actually find and fix it.
@@ -81,7 +69,6 @@ export interface DashboardData {
   topIssues: TopIssue[];
   recordStatus: RecordStatusBreakdown;
   completionDistribution: CompletionBucket[];
-  attentionNeeded: AttentionEmployee[];
   flaggedFields: FlaggedField[];
 }
 
@@ -229,27 +216,6 @@ function computeCompletionDistribution(employees: EmployeeWithRelations[]): Comp
   return bucketLabels.map((label, i) => ({ label, count: counts[i] }));
 }
 
-// Ranks employees by how many basic-info fields they're missing, so the
-// dashboard can point at actual people instead of only abstract percentages.
-function computeAttentionNeeded(employees: EmployeeWithRelations[], limit = 8): AttentionEmployee[] {
-  return employees
-    .map((e) => {
-      const missingFields = getMissingFields(e);
-      return {
-        fullName: e.fullName || "(No name on file)",
-        companyID: e.companyID || "—",
-        department: e.workLocation || "—",
-        position: e.position || "—",
-        missingCount: missingFields.length,
-        totalFields: BASIC_INFO_FIELDS.length,
-        missingFields,
-      };
-    })
-    .filter((e) => e.missingCount > 0)
-    .sort((a, b) => b.missingCount - a.missingCount)
-    .slice(0, limit);
-}
-
 // ReviewFlag.field is either a bare Employee column name ("email") or
 // "<relationKey>[<index>].<field>" (e.g. "experience[0].startDate") — see
 // the model comment in prisma/schema.prisma. Maps either shape back to the
@@ -294,7 +260,6 @@ export async function getDashboardData(): Promise<DashboardData> {
   const topIssues = computeTopIssues(basicInfo, multiTabs, skills);
   const recordStatus = computeRecordStatus(employees);
   const completionDistribution = computeCompletionDistribution(employees);
-  const attentionNeeded = computeAttentionNeeded(employees);
 
   const tabOverview: TabOverviewRow[] = [
     { key: "basicInfo", label: "Basic Info", overallGap: basicInfo.overallGap, reviewCount: reviewCountByTab.basicInfo ?? 0 },
@@ -329,7 +294,6 @@ export async function getDashboardData(): Promise<DashboardData> {
     topIssues,
     recordStatus,
     completionDistribution,
-    attentionNeeded,
     flaggedFields,
   };
 }

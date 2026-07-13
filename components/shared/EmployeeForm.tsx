@@ -1,12 +1,14 @@
 'use client';
 
-// components/chatbot/EmployeeForm.tsx
+// components/shared/EmployeeForm.tsx
 //
-// The structured "add a new employee" form, shown as a modal over the chat.
-// Replaces the one-by-one question flow for creates: the admin fills labelled
-// fields directly (all 10 basic-info fields are required), and can add any
-// number of experience / education / certificate / skill entries via the
-// "+ Add" buttons.
+// The structured employee form, shown as a modal — used both for creating
+// (from the Chatbot, replacing the one-by-one question flow) and, via the
+// title/subtitle/submitLabel overrides, for editing an existing employee
+// (from Records' Flagged-for-review "Edit" action). The admin fills
+// labelled fields directly (all 10 basic-info fields are required), and
+// can add any number of experience / education / certificate / skill /
+// performance-review entries via the "+ Add" buttons.
 //
 // Validation reuses the exact same rules the server enforces
 // (validateFieldValue / validateRelationField from lib/chatbotValidate),
@@ -206,6 +208,13 @@ interface EmployeeFormProps {
   // one of a queue (Excel multi-file import). Omitted for a normal
   // single create.
   progressLabel?: string;
+  // Overrides for the header/subtitle/submit-button text — lets the same
+  // form double as an "edit existing employee" modal (e.g. from Records'
+  // Flagged-for-review "Edit" action) without a separate component that
+  // would just duplicate every field/section defined below.
+  title?: string;
+  subtitle?: string;
+  submitLabel?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -240,6 +249,15 @@ function buildInitialState(initial?: Partial<Record<string, unknown>>): FormStat
         const v = obj[f.key];
         entry[f.key] = v === undefined || v === null ? '' : String(v);
       }
+      // gpaScale isn't in RELATION_UI.education.fields (it's a form-only
+      // companion to gpa, not a real Prisma column), so the loop above
+      // never picks it up — read it explicitly. Only ever populated by a
+      // caller pre-filling from an EXISTING record (Records' "Edit"
+      // action via lib/chatbotValidate's parseGpaValue); a bare create
+      // has no prior scale to restore.
+      if (key === 'education' && obj.gpaScale !== undefined && obj.gpaScale !== null) {
+        entry.gpaScale = String(obj.gpaScale);
+      }
       return entry;
     });
   };
@@ -265,7 +283,15 @@ function coerceRelationValue(field: string, raw: string): string | number {
 // Component
 // ---------------------------------------------------------------------------
 
-export default function EmployeeForm({ initialData, onSubmit, onClose, progressLabel }: EmployeeFormProps) {
+export default function EmployeeForm({
+  initialData,
+  onSubmit,
+  onClose,
+  progressLabel,
+  title = 'Add a new employee',
+  subtitle = 'All basic-info fields are required.',
+  submitLabel = 'Create employee',
+}: EmployeeFormProps) {
   const [form, setForm] = useState<FormState>(() => buildInitialState(initialData));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [generalError, setGeneralError] = useState('');
@@ -691,7 +717,7 @@ export default function EmployeeForm({ initialData, onSubmit, onClose, progressL
         <div className="px-6 py-4 border-b flex items-center justify-between shrink-0" style={{ borderColor: COLORS.border }}>
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="text-lg font-semibold" style={{ color: COLORS.black }}>Add a new employee</h2>
+              <h2 className="text-lg font-semibold" style={{ color: COLORS.black }}>{title}</h2>
               {progressLabel && (
                 <span
                   className="text-[11px] font-medium px-2 py-0.5 rounded-full"
@@ -701,7 +727,7 @@ export default function EmployeeForm({ initialData, onSubmit, onClose, progressL
                 </span>
               )}
             </div>
-            <p className="text-xs" style={{ color: COLORS.gray }}>All basic-info fields are required.</p>
+            <p className="text-xs" style={{ color: COLORS.gray }}>{subtitle}</p>
           </div>
           <button
             onClick={onClose}
@@ -759,7 +785,7 @@ export default function EmployeeForm({ initialData, onSubmit, onClose, progressL
             style={{ backgroundColor: COLORS.red }}
           >
             {submitting && <FontAwesomeIcon icon={faSpinner} className="animate-spin text-xs" />}
-            {submitting ? 'Saving…' : 'Create employee'}
+            {submitting ? 'Saving…' : submitLabel}
           </button>
         </div>
       </div>

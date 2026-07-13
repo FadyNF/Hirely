@@ -14,6 +14,7 @@ export async function getAllEmployees() {
       education: true,
       certificates: true,
       skills: true,
+      performanceReviews: true,
     },
     orderBy: { id: "asc" },
   });

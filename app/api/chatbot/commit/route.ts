@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
     }
 
-    const { action, employeeId, data } = await request.json();
+    const { action, employeeId, data, replaceRelations, resolveFlagId } = await request.json();
 
     if (action !== "create" && action !== "update") {
       return NextResponse.json({ error: "Unsupported action." }, { status: 400 });
@@ -56,12 +56,26 @@ export async function POST(request: NextRequest) {
     const { cleaned } = validateExtractedFields(data || {});
     const scalarData = buildScalarData(cleaned);
 
-    // Relation arrays only get included if they actually have entries —
-    // an empty array would otherwise create a no-op nested write.
+    // Relation arrays: two different callers, two different meanings.
+    // - The chatbot's conversational update only ever includes the ONE
+    //   relation entry actually mentioned in that message ("add a cert
+    //   for X") — so relationData here must be ADDITIVE, just `create`.
+    // - The full-record edit form (Records' "Edit" action, EmployeeForm)
+    //   always submits the COMPLETE current set for every relation, since
+    //   the admin can add/edit/remove entries freely before saving — so
+    //   re-submitting untouched entries as plain `create` would duplicate
+    //   every one of them. `replaceRelations: true` switches to a full
+    //   delete-then-recreate so the DB ends up matching exactly what's on
+    //   the form, including a relation the admin cleared out entirely.
     const relationData: Record<string, unknown> = {};
     for (const key of ["experience", "education", "certificates", "skills", "performanceReviews"] as const) {
       const value = cleaned[key];
-      if (Array.isArray(value) && value.length) relationData[key] = { create: value };
+      const hasEntries = Array.isArray(value) && value.length > 0;
+      if (action === "update" && replaceRelations) {
+        relationData[key] = hasEntries ? { deleteMany: {}, create: value } : { deleteMany: {} };
+      } else if (hasEntries) {
+        relationData[key] = { create: value };
+      }
     }
 
     if (action === "create") {
@@ -85,6 +99,16 @@ export async function POST(request: NextRequest) {
       where: { id: employeeId },
       data: { ...scalarData, ...relationData } as never,
     });
+
+    // Best-effort: the edit itself already succeeded, so a failure here
+    // (bad/stale flag id, already resolved elsewhere) shouldn't turn a
+    // successful save into an error response.
+    if (resolveFlagId) {
+      await prisma.reviewFlag
+        .update({ where: { id: resolveFlagId }, data: { resolved: true } })
+        .catch((err) => console.error("Failed to auto-resolve review flag after edit:", err));
+    }
+
     return NextResponse.json({ status: "updated", employee });
   } catch (error) {
     // P2002 = unique-constraint violation. nationalId and companyID are

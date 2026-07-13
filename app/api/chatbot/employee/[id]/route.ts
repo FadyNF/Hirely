@@ -24,7 +24,7 @@ export async function GET(request: Request, ctx: RouteContext<"/api/chatbot/empl
 
   const employee = await prisma.employee.findUnique({
     where: { id: employeeId },
-    include: { experience: true, education: true, certificates: true, skills: true },
+    include: { experience: true, education: true, certificates: true, skills: true, performanceReviews: true },
   });
   if (!employee) {
     return NextResponse.json({ error: "Employee not found." }, { status: 404 });
