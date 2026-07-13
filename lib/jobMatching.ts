@@ -3,7 +3,7 @@ import { prisma } from "./prisma";
 
 const SEMANTIC_WEIGHT = 0.7;
 const BM25_WEIGHT = 0.3;
-const RRF_K = 10;
+const RRF_K = 30;
 
 const STOPWORDS = new Set([
   "the", "a", "an", "and", "or", "but", "for", "with", "to", "of", "in", "on", "at", "is",
