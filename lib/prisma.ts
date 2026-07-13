@@ -18,8 +18,8 @@ export const prisma = new PrismaClient({ adapter });
 
 export async function markEmployeeEmbeddingDirty(employeeId: number) {
   await prisma.$executeRaw`
-    INSERT INTO "EmployeeEmbedding" ("employeeId", "allcertificates", "embedding", "is_dirty")
+    INSERT INTO "EmployeeEmbedding" ("employeeId", "allexperience", "embedding", "isdirty")
     VALUES (${employeeId}, '', '[]', 1)
-    ON CONFLICT ("employeeId") DO UPDATE SET "is_dirty" = 1
+    ON CONFLICT ("employeeId") DO UPDATE SET "isdirty" = 1
   `;
 }

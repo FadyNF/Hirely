@@ -21,27 +21,38 @@ export async function getEmployeeCombinedCorpusMap(targetEmployeeIds?: number[])
     orderBy: [{ employeeId: "asc" }, { certName: "asc" }],
   });
 
-  let experiences: { employeeId: bigint | number; jobTitle: string; company: string }[];
+  let experiences: { employeeId: bigint | number; jobTitle: string; company: string; description: string | null }[];
   if (targetEmployeeIds) {
     experiences = await prisma.$queryRaw`
-      SELECT employeeId, jobTitle, company
+      SELECT employeeId, jobTitle, company, description
       FROM Experience
       WHERE employeeId IN (${Prisma.join(targetEmployeeIds)})
       ORDER BY employeeId ASC
     `;
   } else {
     experiences = await prisma.$queryRaw`
-      SELECT employeeId, jobTitle, company
+      SELECT employeeId, jobTitle, company, description
       FROM Experience
       ORDER BY employeeId ASC
     `;
   }
 
-  const employeeDataMap = new Map<number, { certs: string[]; experiences: string[] }>();
+  const skills = await prisma.skill.findMany({
+    where: targetEmployeeIds ? { employeeId: { in: targetEmployeeIds } } : undefined,
+    select: {
+      employeeId: true,
+      category: true,
+      name: true,
+      proficiency: true,
+    },
+    orderBy: [{ employeeId: "asc" }, { name: "asc" }],
+  });
+
+  const employeeDataMap = new Map<number, { certs: string[]; experiences: string[]; skills: string[] }>();
 
   const getOrInit = (empId: number) => {
     if (!employeeDataMap.has(empId)) {
-      employeeDataMap.set(empId, { certs: [], experiences: [] });
+      employeeDataMap.set(empId, { certs: [], experiences: [], skills: [] });
     }
     return employeeDataMap.get(empId)!;
   };
@@ -57,21 +68,32 @@ export async function getEmployeeCombinedCorpusMap(targetEmployeeIds?: number[])
 
   for (const exp of experiences) {
     const empId = Number(exp.employeeId);
-    const parts = [exp.jobTitle, exp.company]
+    const parts = [exp.jobTitle, exp.company, exp.description]
       .filter((value): value is string => Boolean(value));
 
     if (parts.length > 0) {
-      getOrInit(empId).experiences.push(parts.join(" at "));
+      getOrInit(empId).experiences.push(parts.join(" - "));
+    }
+  }
+
+  for (const skill of skills) {
+    const empId = Number(skill.employeeId);
+    const skillTextParts = [skill.category, skill.name, skill.proficiency ? `proficiency ${skill.proficiency}` : undefined]
+      .filter((value): value is string => Boolean(value));
+
+    if (skillTextParts.length > 0) {
+      getOrInit(empId).skills.push(skillTextParts.join(" - "));
     }
   }
 
   const result: Record<number, string> = {};
 
-  for (const [employeeId, data] of employeeDataMap.entries()) {
+  for (const [employeeId, data] of Array.from(employeeDataMap.entries())) {
     const summarySegments: string[] = [];
 
     if (data.certs.length > 0) summarySegments.push(`Certificates: ${data.certs.join(", ")}`);
     if (data.experiences.length > 0) summarySegments.push(`Experience: ${data.experiences.join(", ")}`);
+    if (data.skills.length > 0) summarySegments.push(`Skills: ${data.skills.join(", ")}`);
 
     if (summarySegments.length > 0) {
       result[employeeId] = summarySegments.join(" | ");
@@ -110,21 +132,19 @@ export async function populateEmployeeEmbeddingsFromCertificates(): Promise<numb
   if (missingEmployeeIds.length > 0) {
     for (const employeeId of missingEmployeeIds) {
       await prisma.$executeRaw`
-        INSERT INTO "EmployeeEmbedding" ("employeeId", "allcertificates", "embedding", "is_dirty")
+        INSERT INTO "EmployeeEmbedding" ("employeeId", "allexperience", "embedding", "isdirty")
         VALUES (${employeeId}, '', '[]', 1)
       `;
     }
   }
 
   const dirtyRecords = await prisma.$queryRaw<{ employeeId: bigint | number }[]>`
-    SELECT "employeeId" FROM "EmployeeEmbedding" WHERE "is_dirty" = 1
+    SELECT "employeeId" FROM "EmployeeEmbedding" WHERE "isdirty" = 1
   `;
 
-  if (!dirtyRecords || dirtyRecords.length === 0) {
-    return 0;
-  }
-
-  const dirtyIds = dirtyRecords.map((r) => Number(r.employeeId));
+  const dirtyIds = dirtyRecords && dirtyRecords.length > 0
+    ? dirtyRecords.map((r) => Number(r.employeeId))
+    : employees.map((employee) => employee.id);
 
   const textMap = await getEmployeeCombinedCorpusMap(dirtyIds);
   let processedCount = 0;
@@ -135,7 +155,7 @@ export async function populateEmployeeEmbeddingsFromCertificates(): Promise<numb
     if (!text) {
       await prisma.$executeRaw`
         UPDATE "EmployeeEmbedding"
-        SET "allcertificates" = '', "embedding" = '[]', "is_dirty" = 0
+        SET "allexperience" = '', "embedding" = '[]', "isdirty" = 0
         WHERE "employeeId" = ${employeeId}
       `;
       continue;
@@ -146,9 +166,9 @@ export async function populateEmployeeEmbeddingsFromCertificates(): Promise<numb
     await prisma.$executeRaw`
       UPDATE "EmployeeEmbedding"
       SET
-        "allcertificates" = ${text},
+        "allexperience" = ${text},
         "embedding" = ${JSON.stringify(embedding)},
-        "is_dirty" = 0
+        "isdirty" = 0
       WHERE "employeeId" = ${employeeId}
     `;
 
