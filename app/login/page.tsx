@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { Suspense, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { AuthProvider, useAuth } from '@/context';
 import { LoginScreen } from '@/components/auth';
@@ -21,7 +21,12 @@ function LoginInner() {
 export default function LoginPage() {
   return (
     <AuthProvider>
-      <LoginInner />
+      {/* LoginScreen reads useSearchParams() (for the magic-login-expired
+          flag) — the App Router requires that behind a Suspense boundary,
+          otherwise `next build` fails static generation for this route. */}
+      <Suspense fallback={null}>
+        <LoginInner />
+      </Suspense>
     </AuthProvider>
   );
 }

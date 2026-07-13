@@ -37,6 +37,15 @@ model User {
   // created with `true` — the root doesn't approve itself.
   approved Boolean @default(false)
 
+  // One-click login link sent by email the moment root approves a pending
+  // admin — lets them land straight on the dashboard from that email
+  // instead of going back to re-enter their password. Only the SHA-256
+  // hash is stored (same reasoning as refreshTokenHash: a DB leak
+  // shouldn't hand out usable login tokens), single-use (cleared once
+  // consumed in /api/auth/magic-login), and short-lived.
+  magicLoginTokenHash      String?
+  magicLoginTokenExpiresAt DateTime?
+
   createdAt DateTime @default(now())
 
   supportRequests SupportRequest[]
@@ -55,6 +64,14 @@ model SupportRequest {
   subject String
   message String
   status  String @default("open") // "open" | "resolved"
+
+  // The root's written response, set when they resolve the request —
+  // included in the "your request was resolved" email sent to
+  // submittedByEmail. Optional: root can resolve without writing
+  // anything and the email falls back to a generic notice. Left
+  // in place (not cleared) if the request is later reopened, so
+  // re-resolving doesn't lose what was already written.
+  rootReply String?
 
   // Kept even after the submitter's User row is deleted, so root can still
   // see who wrote what. Two fields (id + email snapshot) so we don't lose

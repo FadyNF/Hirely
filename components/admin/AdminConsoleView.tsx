@@ -12,7 +12,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCheck, faXmark, faEnvelope, faTriangleExclamation, faLightbulb, faCircleQuestion } from '@fortawesome/free-solid-svg-icons';
+import { faCheck, faXmark, faEnvelope, faTriangleExclamation, faLightbulb, faCircleQuestion, faReply } from '@fortawesome/free-solid-svg-icons';
 import { useAuth } from '@/context';
 
 const COLORS = {
@@ -39,6 +39,10 @@ export interface SupportRequestSummary {
   subject: string;
   message: string;
   status: string;
+  // The root's written response, if any — see PATCH /api/admin/support-requests/[id].
+  // Set when resolving; left in place across a later reopen so a
+  // re-resolve doesn't lose what was already written.
+  rootReply: string | null;
   submittedByEmail: string;
   submittedById: number | null;
   createdAtIso: string;
@@ -76,12 +80,28 @@ export default function AdminConsoleView({ pending, requests }: { pending: Pendi
   // buttons, not the whole page — a plain boolean would freeze every
   // Approve/Decline while any single one is running.
   const [busyId, setBusyId] = useState<string | null>(null);
+  // Which request's reply box is currently open — at most one at a time,
+  // so "Mark resolved" doesn't fire immediately but instead reveals an
+  // inline textarea first (the reply is optional; Send resolves either way).
+  const [replyingId, setReplyingId] = useState<number | null>(null);
+  const [replyDraft, setReplyDraft] = useState('');
+  // Set when the DB update succeeded but the email failed to send (e.g.
+  // SMTP hiccup) — surfaced inline rather than silently swallowed, since
+  // the whole point of both features (approval, request resolution) is
+  // the other person actually hearing back. Namespaced like busyId
+  // ("approve:5" vs "sr:5") since user ids and request ids can collide.
+  const [emailWarningId, setEmailWarningId] = useState<string | null>(null);
 
   const approve = async (userId: number) => {
     setBusyId(`approve:${userId}`);
+    setEmailWarningId(null);
     try {
       const res = await authFetch(`/api/admin/approvals/${userId}`, { method: 'POST' });
-      if (res.ok) router.refresh();
+      const json = await res.json().catch(() => ({}));
+      if (res.ok) {
+        if (json.emailSent === false) setEmailWarningId(`approve:${userId}`);
+        router.refresh();
+      }
     } finally {
       setBusyId(null);
     }
@@ -97,15 +117,22 @@ export default function AdminConsoleView({ pending, requests }: { pending: Pendi
     }
   };
 
-  const setStatus = async (requestId: number, status: 'open' | 'resolved') => {
+  const setStatus = async (requestId: number, status: 'open' | 'resolved', reply?: string) => {
     setBusyId(`sr:${requestId}`);
+    setEmailWarningId(null);
     try {
       const res = await authFetch(`/api/admin/support-requests/${requestId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify(reply !== undefined ? { status, reply } : { status }),
       });
-      if (res.ok) router.refresh();
+      const json = await res.json().catch(() => ({}));
+      if (res.ok) {
+        if (status === 'resolved' && json.emailSent === false) setEmailWarningId(`sr:${requestId}`);
+        setReplyingId(null);
+        setReplyDraft('');
+        router.refresh();
+      }
     } finally {
       setBusyId(null);
     }
@@ -126,6 +153,16 @@ export default function AdminConsoleView({ pending, requests }: { pending: Pendi
         title="Pending admin approvals"
         subtitle="People who registered and verified their email — waiting on you to let them in"
       >
+        {/* A page-level banner, not a per-row one: the approved user
+            disappears from `pending` the moment router.refresh() re-fetches
+            (they're no longer approved:false), so a warning attached to
+            their row would vanish along with it before anyone could read it. */}
+        {emailWarningId?.startsWith('approve:') && (
+          <p className="text-xs mb-3 flex items-center gap-1.5" style={{ color: COLORS.amber }}>
+            <FontAwesomeIcon icon={faTriangleExclamation} className="text-[10px]" />
+            Account approved, but the sign-in email couldn't be sent — they'll need to log in with their password instead.
+          </p>
+        )}
         {pending.length === 0 ? (
           <p className="text-sm" style={{ color: COLORS.gray }}>Nobody's waiting. All caught up.</p>
         ) : (
@@ -217,15 +254,70 @@ export default function AdminConsoleView({ pending, requests }: { pending: Pendi
                         <span>· {formatDate(r.createdAtIso)}</span>
                       </p>
                       <p className="text-sm whitespace-pre-wrap" style={{ color: COLORS.black }}>{r.message}</p>
+                      {r.rootReply && (
+                        <div className="mt-2.5 pl-3 border-l-2" style={{ borderColor: COLORS.border }}>
+                          <p className="text-[10px] font-semibold uppercase tracking-wider mb-0.5" style={{ color: COLORS.gray, letterSpacing: '0.05em' }}>
+                            Your reply
+                          </p>
+                          <p className="text-sm whitespace-pre-wrap" style={{ color: COLORS.gray }}>{r.rootReply}</p>
+                        </div>
+                      )}
+                      {emailWarningId === `sr:${r.id}` && (
+                        <p className="text-xs mt-2" style={{ color: COLORS.amber }}>
+                          Marked resolved, but the notification email couldn't be sent — check the server logs.
+                        </p>
+                      )}
+                      {replyingId === r.id && (
+                        <div className="mt-3 space-y-2">
+                          <textarea
+                            value={replyDraft}
+                            onChange={(e) => setReplyDraft(e.target.value)}
+                            placeholder="Optional note back to the submitter — included in the resolved-notification email"
+                            rows={3}
+                            maxLength={5000}
+                            autoFocus
+                            className="w-full rounded-lg border px-3 py-2 text-sm outline-none transition-shadow focus:ring-2 resize-none"
+                            style={{ borderColor: COLORS.border }}
+                          />
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              onClick={() => { setReplyingId(null); setReplyDraft(''); }}
+                              disabled={busyId !== null}
+                              className="text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors hover:bg-gray-50 disabled:opacity-50"
+                              style={{ borderColor: COLORS.border, color: COLORS.black }}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              onClick={() => setStatus(r.id, 'resolved', replyDraft.trim())}
+                              disabled={busyId !== null}
+                              className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white flex items-center gap-1.5 transition-all hover:opacity-90 hover:shadow-md disabled:opacity-50"
+                              style={{ backgroundColor: COLORS.green }}
+                            >
+                              <FontAwesomeIcon icon={faReply} className="text-xs" />
+                              {busyId === `sr:${r.id}` ? 'Sending…' : 'Send & resolve'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    <button
-                      onClick={() => setStatus(r.id, isResolved ? 'open' : 'resolved')}
-                      disabled={busyId !== null}
-                      className="text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors hover:bg-gray-50 disabled:opacity-50 shrink-0"
-                      style={{ borderColor: COLORS.border, color: COLORS.black }}
-                    >
-                      {busyId === `sr:${r.id}` ? '…' : isResolved ? 'Reopen' : 'Mark resolved'}
-                    </button>
+                    {replyingId !== r.id && (
+                      <button
+                        onClick={() => {
+                          if (isResolved) {
+                            setStatus(r.id, 'open');
+                          } else {
+                            setReplyDraft('');
+                            setReplyingId(r.id);
+                          }
+                        }}
+                        disabled={busyId !== null}
+                        className="text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors hover:bg-gray-50 disabled:opacity-50 shrink-0"
+                        style={{ borderColor: COLORS.border, color: COLORS.black }}
+                      >
+                        {busyId === `sr:${r.id}` ? '…' : isResolved ? 'Reopen' : 'Mark resolved'}
+                      </button>
+                    )}
                   </div>
                 </div>
               );

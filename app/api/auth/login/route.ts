@@ -80,7 +80,10 @@ export async function POST(request: NextRequest) {
     // Credentials + OTP can both be valid but the account still isn't
     // usable until the root admin has approved it. Return a distinct
     // status so the client can route to the "waiting for approval" screen
-    // instead of showing a wrong-password error.
+    // instead of showing a wrong-password error. No cookie is issued here —
+    // approval instead arrives as a one-click magic-login email (see
+    // /api/auth/magic-login and lib/rootAdmin's approval route), so the
+    // admin never needs to re-enter their password once approved.
     if (!user.approved) {
       return NextResponse.json({
         status: "pending_approval",

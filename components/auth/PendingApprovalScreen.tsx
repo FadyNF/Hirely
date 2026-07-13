@@ -57,7 +57,7 @@ export default function PendingApprovalScreen() {
             </div>
             <h2 className="text-lg font-semibold mb-1.5 text-gray-800">Waiting for approval</h2>
             <p className="text-sm leading-relaxed text-gray-500">
-              Your account is pending review by an administrator. You&apos;ll be able to sign in once it&apos;s approved.
+              Your account is pending review by an administrator. Once it&apos;s approved, we&apos;ll email you a link that signs you in directly — no need to come back here.
             </p>
           </div>
 
