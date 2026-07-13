@@ -258,37 +258,45 @@ function JobMatchingCard({ stats }: { stats: JobMatchingStats }) {
     const syncPct = stats.totalProfiles > 0
         ? Math.round((stats.profilesSynced / stats.totalProfiles) * 100)
         : 0;
+    const matchedPct = stats.jobOpenings > 0
+        ? Math.round((stats.matchedOpenings / stats.jobOpenings) * 100)
+        : 0;
     return (
-        <div className="flex flex-col justify-between h-full gap-5">
-            <div className="grid grid-cols-2 gap-4">
+        <div className="flex flex-col justify-between h-full gap-4">
+            <div className="grid grid-cols-2 gap-3">
                 <div
-                    className="rounded-lg border p-4"
+                    className="rounded-lg border p-3.5"
                     style={{ borderColor: COLORS.border }}
                 >
                     <p className="text-xs mb-1" style={{ color: COLORS.gray }}>
-                        Profiles synced
+                        Job openings
                     </p>
                     <p className="text-2xl font-bold" style={{ color: COLORS.black }}>
-                        {stats.profilesSynced}
-                        <span className="text-sm font-normal" style={{ color: COLORS.gray }}>
-                            {" "}/ {stats.totalProfiles}
-                        </span>
+                        {stats.jobOpenings}
                     </p>
                 </div>
                 <div
-                    className="rounded-lg border p-4"
+                    className="rounded-lg border p-3.5"
                     style={{ borderColor: COLORS.border }}
                 >
                     <p className="text-xs mb-1" style={{ color: COLORS.gray }}>
-                        Sync coverage
+                        Matched
                     </p>
                     <p
                         className="text-2xl font-bold"
-                        style={{ color: syncPct === 100 ? "#10B981" : COLORS.red }}
+                        style={{ color: stats.jobOpenings === 0 ? COLORS.gray : matchedPct === 100 ? "#10B981" : COLORS.red }}
                     >
-                        {syncPct}%
+                        {stats.jobOpenings === 0 ? "—" : `${matchedPct}%`}
                     </p>
                 </div>
+            </div>
+
+            <div className="flex items-center gap-2 text-xs" style={{ color: COLORS.gray }}>
+                <span
+                    className="inline-block w-2 h-2 rounded-full"
+                    style={{ background: syncPct === 100 ? "#10B981" : COLORS.red }}
+                />
+                {stats.profilesSynced}/{stats.totalProfiles} employee profiles synced
             </div>
 
             <a

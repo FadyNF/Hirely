@@ -44,6 +44,8 @@ export interface RecordStatusBreakdown {
 export interface JobMatchingStats {
   totalProfiles: number;
   profilesSynced: number;
+  jobOpenings: number;
+  matchedOpenings: number;
 }
 
 
@@ -210,6 +212,8 @@ async function computeJobMatchingStats(totalEmployees: number): Promise<JobMatch
   return {
     totalProfiles: totalEmployees,
     profilesSynced: Number(synced[0]?.cnt ?? 0),
+    jobOpenings: 0,
+    matchedOpenings: 0,
   };
 }
 
