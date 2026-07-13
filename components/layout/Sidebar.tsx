@@ -19,6 +19,7 @@ import {
   faRightFromBracket,
   faChevronLeft,
   faChevronRight,
+  faBriefcase,
   faUserShield,
   faLifeRing,
 } from '@fortawesome/free-solid-svg-icons';
@@ -34,6 +35,7 @@ const NAV_ITEMS = [
   { href: '/app', label: 'Dashboard', icon: faGaugeHigh },
   { href: '/app/records', label: 'Records', icon: faTableList },
   { href: '/app/chatbot', label: 'Chatbot', icon: faComments },
+  { href: '/app/matching', label: 'Job Matching', icon: faBriefcase },
 ];
 
 function NavLink({

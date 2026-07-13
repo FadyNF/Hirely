@@ -15,3 +15,11 @@ const adapter = new PrismaBetterSqlite3({
 });
 
 export const prisma = new PrismaClient({ adapter });
+
+export async function markEmployeeEmbeddingDirty(employeeId: number) {
+  await prisma.$executeRaw`
+    INSERT INTO "EmployeeEmbedding" ("employeeId", "allcertificates", "embedding", "is_dirty")
+    VALUES (${employeeId}, '', '[]', 1)
+    ON CONFLICT ("employeeId") DO UPDATE SET "is_dirty" = 1
+  `;
+}

@@ -14,7 +14,7 @@
 // blocking the row.
 
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, markEmployeeEmbeddingDirty } from "@/lib/prisma";
 import { Prisma } from "@/lib/generated/prisma/client";
 import { requireUserId } from "@/lib/requireAuth";
 import { validateBatchRow, type FieldIssue } from "@/lib/chatbotValidate";
@@ -60,6 +60,7 @@ export async function POST(request: NextRequest) {
 
     const create = async (scalarData: Record<string, unknown>, flagIssues: FieldIssue[]) => {
       const employee = await prisma.employee.create({ data: { ...scalarData, ...relationCreates } as never });
+      await markEmployeeEmbeddingDirty(employee.id).catch(() => {});
       if (flagIssues.length > 0) {
         await prisma.reviewFlag.createMany({
           data: flagIssues.map((issue) => ({

@@ -5,7 +5,7 @@
 // Nothing upstream of this route touches Prisma's create/update methods.
 
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, markEmployeeEmbeddingDirty } from "@/lib/prisma";
 import { Prisma } from "@/lib/generated/prisma/client";
 import { requireUserId } from "@/lib/requireAuth";
 import { validateExtractedFields } from "@/lib/chatbotValidate";
@@ -88,6 +88,7 @@ export async function POST(request: NextRequest) {
       const employee = await prisma.employee.create({
         data: { ...scalarData, ...relationData } as never,
       });
+      await markEmployeeEmbeddingDirty(employee.id).catch(() => {});
       return NextResponse.json({ status: "created", employee });
     }
 
@@ -99,6 +100,7 @@ export async function POST(request: NextRequest) {
       where: { id: employeeId },
       data: { ...scalarData, ...relationData } as never,
     });
+    await markEmployeeEmbeddingDirty(employee.id).catch(() => {});
 
     // Best-effort: the edit itself already succeeded, so a failure here
     // (bad/stale flag id, already resolved elsewhere) shouldn't turn a

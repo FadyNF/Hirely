@@ -132,6 +132,7 @@ model Employee {
   skills             Skill[]
   performanceReviews PerformanceReview[]
   reviewFlags        ReviewFlag[]
+  embedding          EmployeeEmbedding?
 }
 
 // A value the batch importer couldn't confidently accept, kept and written
@@ -226,4 +227,18 @@ model PerformanceReview {
 
   employeeId Int
   employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+}
+
+// Cached text corpus + Gemini embedding vector for each employee, used by
+// the job-matching feature's hybrid BM25 + semantic search pipeline.
+// All reads/writes go through raw SQL (lib/employeeCertificates.ts) so the
+// embedding column is just a TEXT holding a JSON array of floats.
+model EmployeeEmbedding {
+  id              Int     @id @default(autoincrement())
+  employeeId      Int     @unique
+  allcertificates String?
+  embedding       String? // JSON-serialised float[] — raw SQL only
+  is_dirty        Int     @default(0)
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 }
