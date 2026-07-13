@@ -132,14 +132,14 @@ export async function populateEmployeeEmbeddingsFromCertificates(): Promise<numb
   if (missingEmployeeIds.length > 0) {
     for (const employeeId of missingEmployeeIds) {
       await prisma.$executeRaw`
-        INSERT INTO "EmployeeEmbedding" ("employeeId", "allcertificates", "embedding", "is_dirty")
+        INSERT INTO "EmployeeEmbedding" ("employeeId", "allexperience", "embedding", "isdirty")
         VALUES (${employeeId}, '', '[]', 1)
       `;
     }
   }
 
   const dirtyRecords = await prisma.$queryRaw<{ employeeId: bigint | number }[]>`
-    SELECT "employeeId" FROM "EmployeeEmbedding" WHERE "is_dirty" = 1
+    SELECT "employeeId" FROM "EmployeeEmbedding" WHERE "isdirty" = 1
   `;
 
   const dirtyIds = dirtyRecords && dirtyRecords.length > 0
@@ -155,7 +155,7 @@ export async function populateEmployeeEmbeddingsFromCertificates(): Promise<numb
     if (!text) {
       await prisma.$executeRaw`
         UPDATE "EmployeeEmbedding"
-        SET "allcertificates" = '', "embedding" = '[]', "is_dirty" = 0
+        SET "allexperience" = '', "embedding" = '[]', "isdirty" = 0
         WHERE "employeeId" = ${employeeId}
       `;
       continue;
@@ -166,9 +166,9 @@ export async function populateEmployeeEmbeddingsFromCertificates(): Promise<numb
     await prisma.$executeRaw`
       UPDATE "EmployeeEmbedding"
       SET
-        "allcertificates" = ${text},
+        "allexperience" = ${text},
         "embedding" = ${JSON.stringify(embedding)},
-        "is_dirty" = 0
+        "isdirty" = 0
       WHERE "employeeId" = ${employeeId}
     `;
 

@@ -234,11 +234,11 @@ model PerformanceReview {
 // All reads/writes go through raw SQL (lib/employeeCertificates.ts) so the
 // embedding column is just a TEXT holding a JSON array of floats.
 model EmployeeEmbedding {
-  id              Int     @id @default(autoincrement())
-  employeeId      Int     @unique
-  allcertificates String?
-  embedding       String? // JSON-serialised float[] — raw SQL only
-  is_dirty        Int     @default(0)
+  id            Int     @id @default(autoincrement())
+  employeeId    Int     @unique
+  allexperience String?
+  embedding     String? // JSON-serialised float[] — raw SQL only
+  isdirty       Int     @default(0)
 
   employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 }

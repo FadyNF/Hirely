@@ -136,9 +136,9 @@ export async function matchTopProfiles(
   topN?: number
 ) {
   const dbProfiles = await prisma.$queryRaw<
-    { employeeId: bigint | number; allcertificates: string; embedding: string }[]
+    { employeeId: bigint | number; allexperience: string; embedding: string }[]
   >`
-    SELECT "employeeId", "allcertificates", "embedding"
+    SELECT "employeeId", "allexperience", "embedding"
     FROM "EmployeeEmbedding"
   `;
 
@@ -146,7 +146,7 @@ export async function matchTopProfiles(
     return [];
   }
 
-  const profileTexts = dbProfiles.map((p) => p.allcertificates || "");
+  const profileTexts = dbProfiles.map((p) => p.allexperience || "");
 
   const tokenizedCorpus = profileTexts.map((txt) => tokenize(txt));
   const bm25 = new BM25Okapi(tokenizedCorpus);
@@ -172,6 +172,6 @@ export async function matchTopProfiles(
 
   return topMatches.map((match) => ({
     employeeId: Number(dbProfiles[match.docIdx].employeeId),
-    text: dbProfiles[match.docIdx].allcertificates,
+    text: dbProfiles[match.docIdx].allexperience,
   }));
 }
