@@ -10,6 +10,7 @@
 // pending users.
 
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 
 const COLORS = {
   red: '#DC2626',
@@ -71,7 +72,12 @@ export default function SupportRequestModal({
     }
   };
 
-  return (
+  // Portaled to document.body: this component gets mounted inside
+  // Sidebar's <aside>, which is `position: sticky` — sticky always opens
+  // its own stacking context, so a merely-fixed descendant's z-index only
+  // wins against other sidebar children, not the Dashboard's charts in
+  // the sibling <main>. Escaping to body sidesteps that entirely.
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ backgroundColor: 'rgba(17,17,17,0.5)' }}
@@ -209,6 +215,7 @@ export default function SupportRequestModal({
           </form>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
