@@ -1,4 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
+import { Prisma } from "./generated/prisma/client";
 import { prisma } from "./prisma";
 
 const SEMANTIC_WEIGHT = 0.7;
@@ -11,6 +12,14 @@ const STOPWORDS = new Set([
 ]);
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+type StructuredJobRequirements = {
+  nationality?: string | null;
+  gender?: string | null;
+  totalExperience?: number | null;
+  yearsExpElsewedy?: number | null;
+  requirementText: string;
+};
 
 function tokenize(text: string): string[] {
   return text
@@ -92,6 +101,67 @@ class BM25Okapi {
   }
 }
 
+function buildRequirementText(requirements: StructuredJobRequirements): string {
+  return requirements.requirementText.trim();
+}
+
+async function extractJobRequirements(jobDescription: string): Promise<StructuredJobRequirements> {
+  if (!process.env.GEMINI_API_KEY) {
+    return {
+      requirementText: jobDescription.trim(),
+    };
+  }
+
+  try {
+    const prompt = `You are extracting a structured employee-profile requirement from a job description.
+    Return valid JSON only, with this schema:
+    {
+      "nationality": "string (e.g., 'Egyptian', 'Jordanian') or null",
+      "gender": "string ('Male' or 'Female') or null",
+      "totalExperience": "number or null",
+      "yearsExpElsewedy": "number or null",
+      "requirementText": "A concise summary of the required technical skills, tech stack, and academic background. CRITICAL: DO NOT mention years of experience, nationality, or gender in this text, as they are already extracted above."
+    }
+
+    Job description:
+    ${jobDescription}`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt,
+    });
+
+    const rawText = response.text?.trim() ?? "";
+    const jsonText = rawText
+      .replace(/^```json\s*/i, "")
+      .replace(/^```\s*/i, "")
+      .replace(/```$/i, "")
+      .trim();
+
+    const parsed = JSON.parse(jsonText) as Partial<StructuredJobRequirements>;
+
+    const structuredData: StructuredJobRequirements = {
+      nationality: parsed.nationality ?? null,
+      gender: parsed.gender ?? null,
+      totalExperience: parsed.totalExperience ? Number(parsed.totalExperience) : null,
+      yearsExpElsewedy: parsed.yearsExpElsewedy ? Number(parsed.yearsExpElsewedy) : null,
+      requirementText: parsed.requirementText?.trim() || jobDescription.trim(),
+    };
+
+    // Prints the extracted requirements object with syntax coloring in Node's terminal
+    console.log("\n\x1b[36m=== Extracted Requirements from Gemini ===\x1b[0m");
+    console.dir(structuredData, { depth: null, colors: true });
+    console.log("\x1b[36m==========================================\x1b[0m\n");
+
+    return structuredData;
+  } catch (error) {
+    console.error("Failed to parse job requirements with Gemini", error);
+    return {
+      requirementText: jobDescription.trim(),
+    };
+  }
+}
+
 async function embedText(text: string): Promise<number[]> {
   const resp = await ai.models.embedContent({
     model: "gemini-embedding-2",
@@ -115,8 +185,8 @@ function rrfFusion(
   const bm25RankOf = new Map<number, number>();
   const semRankOf = new Map<number, number>();
 
-  bm25Ranking.forEach((docIdx, rank) => bm25RankOf.set(docIdx, rank));
-  semanticRanking.forEach((docIdx, rank) => semRankOf.set(docIdx, rank));
+  bm25Ranking.forEach((docIdx, rank) => bm25RankOf.set(docIdx, rank + 1));
+  semanticRanking.forEach((docIdx, rank) => semRankOf.set(docIdx, rank + 1));
 
   const fusedScores: { docIdx: number; score: number }[] = [];
 
@@ -135,12 +205,43 @@ export async function matchTopProfiles(
   jobDescription: string,
   topN?: number
 ) {
-  const dbProfiles = await prisma.$queryRaw<
-    { employeeId: bigint | number; allexperience: string; embedding: string }[]
-  >`
-    SELECT "employeeId", "allexperience", "embedding"
-    FROM "EmployeeEmbedding"
-  `;
+  const requirements = await extractJobRequirements(jobDescription);
+  const searchText = buildRequirementText(requirements);
+
+  const where: Prisma.EmployeeWhereInput = {};
+  if (requirements.nationality) {
+    where.nationality = { equals: requirements.nationality };
+  }
+  if (requirements.gender) {
+    where.gender = { equals: requirements.gender };
+  }
+  if (requirements.totalExperience !== null && !isNaN(requirements.totalExperience)) {
+    where.totalExperience = { gte: requirements.totalExperience };
+  }
+  if (requirements.yearsExpElsewedy !== null && !isNaN(requirements.yearsExpElsewedy)) {
+    where.yearsExpElsewedy = { gte: requirements.yearsExpElsewedy };
+  }
+
+  const employees = await prisma.employee.findMany({
+    where,
+    select: { id: true },
+  });
+
+  const employeeIds = employees.map((employee) => employee.id);
+  if (employeeIds.length === 0) {
+    return [];
+  }
+
+  const dbProfiles = await prisma.employeeEmbedding.findMany({
+    where: { 
+      employeeId: { in: employeeIds } 
+    },
+    select: { 
+      employeeId: true,
+      allexperience: true, 
+      embedding: true 
+    }
+  });
 
   if (!dbProfiles || dbProfiles.length === 0) {
     return [];
@@ -150,14 +251,17 @@ export async function matchTopProfiles(
 
   const tokenizedCorpus = profileTexts.map((txt) => tokenize(txt));
   const bm25 = new BM25Okapi(tokenizedCorpus);
-  const bm25Scores = bm25.getScores(tokenize(jobDescription));
+  const bm25Scores = bm25.getScores(tokenize(searchText));
   const bm25Ranking = getSortedIndices(bm25Scores);
 
-  const queryVec = await embedText(jobDescription);
+  const queryVec = await embedText(searchText);
   const semanticScores = dbProfiles.map((profile) => {
     let profileVec: number[] = [];
     if (typeof profile.embedding === "string") {
-      try { profileVec = JSON.parse(profile.embedding); } catch { /* empty */ }
+      try {
+        profileVec = JSON.parse(profile.embedding);
+      } catch {
+      }
     } else if (Array.isArray(profile.embedding)) {
       profileVec = profile.embedding as unknown as number[];
     }
@@ -172,6 +276,7 @@ export async function matchTopProfiles(
 
   return topMatches.map((match) => ({
     employeeId: Number(dbProfiles[match.docIdx].employeeId),
-    text: dbProfiles[match.docIdx].allexperience,
+    text: dbProfiles[match.docIdx].allexperience ?? "",
+    parsedRequirements: requirements,
   }));
 }
