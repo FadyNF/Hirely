@@ -6,13 +6,8 @@
 // same realistic value pools — just writing real rows via Prisma instead
 // of returning an in-memory array for React to read.
 
-import { PrismaClient } from "../lib/generated/prisma/client";
-import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
-
-const adapter = new PrismaBetterSqlite3({
-  url: process.env.DATABASE_URL || "file:./prisma/dev.db",
-});
-const prisma = new PrismaClient({ adapter });
+import { db } from "../lib/db";
+import { createEmployeeWithRelations, type RelationValues } from "../lib/employees";
 
 // ---- Value pools (identical to mockEmployees.js) ----
 
@@ -109,14 +104,16 @@ function maybeValue<T>(likelihood: number, generator: () => T): T | null {
 async function main() {
   console.log("Clearing existing employee data...");
   // Order matters: child tables first, since they reference Employee.
-  // Prisma's onDelete: Cascade would handle this automatically if we
-  // just deleted employees, but being explicit here makes the seed
+  // PRAGMA foreign_keys = ON (lib/db.ts) would cascade this automatically
+  // if we just deleted employees, but being explicit here makes the seed
   // script's behavior obvious without relying on that side effect.
-  await prisma.skill.deleteMany();
-  await prisma.certificate.deleteMany();
-  await prisma.education.deleteMany();
-  await prisma.experience.deleteMany();
-  await prisma.employee.deleteMany();
+  db.exec(`
+    DELETE FROM "Skill";
+    DELETE FROM "Certificate";
+    DELETE FROM "Education";
+    DELETE FROM "Experience";
+    DELETE FROM "Employee";
+  `);
 
   console.log("Seeding 20 mock employees...");
 
@@ -129,104 +126,84 @@ async function main() {
     const birthDay = 1 + Math.floor(Math.random() * 28);
     const birthDateStr = `${birthYear}-${String(birthMonth).padStart(2, "0")}-${String(birthDay).padStart(2, "0")}`;
 
-    const employee = await prisma.employee.create({
-      data: {
-        fullName: name,
-        phone: maybeValue(0.05, randomPhone),
-        birthDate: maybeValue(0.08, () => birthDateStr),
-        nationality: maybeValue(0.04, () => pick(NATIONALITIES)),
-        maritalStatus: maybeValue(0.1, () => pick(MARITAL_STATUSES)),
-        email: maybeValue(0.03, () => emailFromName(name)),
-        workLocation: maybeValue(0.1, () => pick(WORK_LOCATIONS)),
-        gender: maybeValue(0.03, () => pick(GENDERS)),
-        nationalId: maybeValue(0.05, () => makeNationalId(birthYear, birthMonth, birthDay)),
-        militaryStatus: maybeValue(0.12, () => pick(MILITARY_STATUSES)),
-      },
-    });
+    const scalarData: Record<string, unknown> = {
+      fullName: name,
+      phone: maybeValue(0.05, randomPhone),
+      birthDate: maybeValue(0.08, () => birthDateStr),
+      nationality: maybeValue(0.04, () => pick(NATIONALITIES)),
+      maritalStatus: maybeValue(0.1, () => pick(MARITAL_STATUSES)),
+      email: maybeValue(0.03, () => emailFromName(name)),
+      workLocation: maybeValue(0.1, () => pick(WORK_LOCATIONS)),
+      gender: maybeValue(0.03, () => pick(GENDERS)),
+      nationalId: maybeValue(0.05, () => makeNationalId(birthYear, birthMonth, birthDay)),
+      militaryStatus: maybeValue(0.12, () => pick(MILITARY_STATUSES)),
+    };
+    // Drop nulls — createEmployeeWithRelations only inserts columns
+    // actually present in the object, same "never write a field with no
+    // value" rule the rest of the app follows.
+    for (const key of Object.keys(scalarData)) {
+      if (scalarData[key] === null) delete scalarData[key];
+    }
+
+    const relations: RelationValues = {};
 
     // ---- Experience: 0-3 entries ----
     const experienceCount = Math.floor(Math.random() * 4);
-    for (let j = 0; j < experienceCount; j++) {
-      await prisma.experience.create({
-        data: {
-          employeeId: employee.id,
-          jobTitle: pick(JOB_TITLES),
-          company: pick(COMPANIES),
-          startDate: randomDate(2015, 2022),
-          endDate: randomDate(2022, 2026),
-          description: maybeValue(0.3, () => pick(DESCRIPTIONS)),
-        },
-      });
-    }
+    relations.experience = Array.from({ length: experienceCount }, () => ({
+      jobTitle: pick(JOB_TITLES),
+      company: pick(COMPANIES),
+      startDate: randomDate(2015, 2022),
+      endDate: randomDate(2022, 2026),
+      description: maybeValue(0.3, () => pick(DESCRIPTIONS)),
+    }));
 
     // ---- Education: 0-2 entries ----
     const educationCount = Math.floor(Math.random() * 3);
-    for (let j = 0; j < educationCount; j++) {
-      await prisma.education.create({
-        data: {
-          employeeId: employee.id,
-          degree: pick(DEGREES),
-          fieldOfStudy: pick(FIELDS_OF_STUDY),
-          institution: pick(INSTITUTIONS),
-          graduationYear: 2015 + Math.floor(Math.random() * 11),
-          // gpa is text now, tagged with its scale (e.g. "3.24/4.0
-          // (American)") — the seed always generates American-scale
-          // values, same range as before (2.5-4.0).
-          gpa: maybeValue(0.5, () => `${(2.5 + Math.random() * 1.5).toFixed(2)}/4.0 (American)`),
-        },
-      });
-    }
+    relations.education = Array.from({ length: educationCount }, () => ({
+      degree: pick(DEGREES),
+      fieldOfStudy: pick(FIELDS_OF_STUDY),
+      institution: pick(INSTITUTIONS),
+      graduationYear: 2015 + Math.floor(Math.random() * 11),
+      // gpa is text now, tagged with its scale (e.g. "3.24/4.0
+      // (American)") — the seed always generates American-scale values,
+      // same range as before (2.5-4.0).
+      gpa: maybeValue(0.5, () => `${(2.5 + Math.random() * 1.5).toFixed(2)}/4.0 (American)`),
+    }));
 
     // ---- Certificates: 0-3 entries ----
     const certCount = Math.floor(Math.random() * 4);
-    for (let j = 0; j < certCount; j++) {
-      await prisma.certificate.create({
-        data: {
-          employeeId: employee.id,
-          certName: pick(CERT_NAMES),
-          issuer: pick(ISSUERS),
-          issueDate: randomDate(2019, 2025),
-          expiryDate: maybeValue(0.6, () => randomDate(2026, 2029)),
-        },
-      });
-    }
+    relations.certificates = Array.from({ length: certCount }, () => ({
+      certName: pick(CERT_NAMES),
+      issuer: pick(ISSUERS),
+      issueDate: randomDate(2019, 2025),
+      expiryDate: maybeValue(0.6, () => randomDate(2026, 2029)),
+    }));
 
     // ---- Skills: technical + language ----
     const techCount = Math.floor(Math.random() * 6);
     const shuffledTech = [...TECH_SKILLS].sort(() => Math.random() - 0.5);
-    for (const skillName of shuffledTech.slice(0, techCount)) {
-      await prisma.skill.create({
-        data: {
-          employeeId: employee.id,
-          category: "technical",
-          name: skillName,
-          proficiency: 40 + Math.floor(Math.random() * 60),
-        },
-      });
-    }
-
     const langCount = Math.floor(Math.random() * 3);
     const shuffledLang = [...LANGUAGES].sort(() => Math.random() - 0.5);
-    for (const langName of shuffledLang.slice(0, langCount)) {
-      await prisma.skill.create({
-        data: {
-          employeeId: employee.id,
-          category: "language",
-          name: langName,
-          proficiency: 40 + Math.floor(Math.random() * 60),
-        },
-      });
-    }
+    relations.skills = [
+      ...shuffledTech.slice(0, techCount).map((skillName) => ({
+        category: "technical",
+        name: skillName,
+        proficiency: 40 + Math.floor(Math.random() * 60),
+      })),
+      ...shuffledLang.slice(0, langCount).map((langName) => ({
+        category: "language",
+        name: langName,
+        proficiency: 40 + Math.floor(Math.random() * 60),
+      })),
+    ];
+
+    createEmployeeWithRelations(scalarData, relations);
   }
 
   console.log("Done seeding 20 employees.");
 }
 
-main()
-  .catch((e) => {
-    console.error(e);
-    process.exit(1);
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

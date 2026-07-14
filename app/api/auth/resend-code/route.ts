@@ -6,7 +6,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { sendVerificationEmail } from "@/lib/mailer";
-import { prisma } from "@/lib/prisma";
+import { findUserByEmail, updateUser } from "@/lib/users";
 
 function generateOtpCode(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Email is required." }, { status: 400 });
     }
 
-    const user = await prisma.user.findUnique({ where: { email } });
+    const user = findUserByEmail(email);
 
     // Don't reveal whether the account exists — same reasoning as
     // verify-code's vague error messages.
@@ -38,10 +38,7 @@ export async function POST(request: NextRequest) {
     const verificationCode = generateOtpCode();
     const codeExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { verificationCode, codeExpiresAt },
-    });
+    updateUser(user.id, { verificationCode, codeExpiresAt });
 
     await sendVerificationEmail(email, verificationCode);
 

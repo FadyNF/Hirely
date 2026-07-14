@@ -8,12 +8,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { sendVerificationEmail } from "@/lib/mailer";
-import { prisma } from "@/lib/prisma";
+import { findUserByEmail, createUser, deleteUser } from "@/lib/users";
 import { isRootEmail } from "@/lib/rootAdmin";
-// ^ This path matches the "output" setting we saw in schema.prisma
-//   (generator client { output = "../lib/generated/prisma" }).
-//   Prisma writes its generated code there instead of node_modules,
-//   so we import it from that exact location.
 
 // Generates a random 6-digit code, e.g. "482913".
 // Math.random() gives a decimal like 0.4829134..., multiplying by
@@ -51,7 +47,7 @@ export async function POST(request: NextRequest) {
     }
 
     // ---- Check if this email is already registered ----
-    const existingUser = await prisma.user.findUnique({ where: { email } });
+    const existingUser = findUserByEmail(email);
     if (existingUser) {
       return NextResponse.json(
         { error: "An account with this email already exists." },
@@ -68,27 +64,24 @@ export async function POST(request: NextRequest) {
     const verificationCode = generateOtpCode();
     const codeExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes from now
 
-    // ---- Create the user AND send the email as one unit ----
-    // If sendVerificationEmail throws (bad SMTP creds, network blip,
-    // Gmail rate limit), Prisma rolls back tx.user.create automatically —
-    // otherwise a failed send would leave a permanent, half-created user
-    // row behind, and every future registration attempt with this same
-    // email would hit the "already exists" check below with no way to
-    // actually finish signing up. The timeout is bumped above the
-    // mailer's own 10s connection timeout (lib/mailer.ts) so a slow-but-
-    // successful send isn't cut off by the transaction wrapper itself.
-    const user = await prisma.$transaction(async (tx) => {
-      const created = await tx.user.create({
-        data: {
-          email,
-          passwordHash,
-          verificationCode,
-          codeExpiresAt,
-        },
-      });
+    // ---- Create the user, then send the email ----
+    // better-sqlite3 transactions are synchronous, so this can't be one
+    // db.transaction() wrapping an awaited email send the way Prisma's
+    // $transaction could. Instead: insert first, then send — if
+    // sendVerificationEmail throws (bad SMTP creds, network blip, Gmail
+    // rate limit), manually delete the just-created row so a failed send
+    // doesn't leave a permanent, half-created user behind (which would
+    // make every future registration attempt with this email hit the
+    // "already exists" check with no way to actually finish signing up).
+    const created = createUser({ email, passwordHash, verificationCode, codeExpiresAt });
+    let user;
+    try {
       await sendVerificationEmail(email, verificationCode);
-      return created;
-    }, { timeout: 15000 });
+      user = created;
+    } catch (sendError) {
+      deleteUser(created.id);
+      throw sendError;
+    }
 
     // ---- Respond, matching their real API's response shape ----
     return NextResponse.json({

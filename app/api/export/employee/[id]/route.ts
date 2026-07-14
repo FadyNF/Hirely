@@ -5,7 +5,7 @@
 // edited and re-imported. Auth-gated like every other data route.
 
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { getEmployeeById } from "@/lib/employees";
 import { requireUserId } from "@/lib/requireAuth";
 import { buildSingleEmployeeWorkbook } from "@/lib/excelImport/singleEmployeeTemplate";
 
@@ -20,10 +20,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     return NextResponse.json({ error: "Invalid employee id." }, { status: 400 });
   }
 
-  const employee = await prisma.employee.findUnique({
-    where: { id: employeeId },
-    include: { experience: true, education: true, certificates: true, performanceReviews: true },
-  });
+  const employee = await getEmployeeById(employeeId);
   if (!employee) {
     return NextResponse.json({ error: "Employee not found." }, { status: 404 });
   }

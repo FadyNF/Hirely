@@ -6,7 +6,7 @@
 // health metrics the old AdminDashboard.jsx computed over mock data —
 // except this is now real data, real math, no fabrication.
 
-import { prisma } from "./prisma";
+import { db } from "./db";
 import { getAllEmployees, type EmployeeWithRelations } from "./employees";
 import { BASIC_INFO_FIELDS, BASIC_INFO_LABELS, MULTI_TAB_CONFIG, SKILL_CATEGORIES } from "./tabConfig";
 
@@ -205,13 +205,14 @@ function computeRecordStatus(employees: EmployeeWithRelations[]): RecordStatusBr
 // "shape" of the data quality problem the way a histogram shows the shape
 // of any distribution — how many people are almost done vs. barely started.
 async function computeJobMatchingStats(totalEmployees: number): Promise<JobMatchingStats> {
-  const synced = await prisma.$queryRaw<{ cnt: bigint | number }[]>`
-    SELECT COUNT(*) as cnt FROM "EmployeeEmbedding"
-    WHERE "embedding" IS NOT NULL AND "embedding" != '[]' AND "embedding" != ''
-  `;
+  const synced = db
+    .prepare(
+      `SELECT COUNT(*) as cnt FROM "EmployeeEmbedding" WHERE "embedding" IS NOT NULL AND "embedding" != '[]' AND "embedding" != ''`
+    )
+    .get() as { cnt: number };
   return {
     totalProfiles: totalEmployees,
-    profilesSynced: Number(synced[0]?.cnt ?? 0),
+    profilesSynced: Number(synced?.cnt ?? 0),
     jobOpenings: 0,
     matchedOpenings: 0,
   };
@@ -230,11 +231,14 @@ function reviewFlagTabKey(field: string): string {
 export async function getDashboardData(): Promise<DashboardData> {
   const employees = await getAllEmployees();
 
-  const openFlags = await prisma.reviewFlag.findMany({
-    where: { resolved: false },
-    include: { employee: { select: { fullName: true } } },
-    orderBy: { createdAt: "desc" },
-  });
+  const openFlags = db
+    .prepare(
+      `SELECT rf."id", rf."employeeId", rf."field", rf."rawValue", rf."reason", e."fullName" as "employeeFullName"
+       FROM "ReviewFlag" rf JOIN "Employee" e ON e."id" = rf."employeeId"
+       WHERE rf."resolved" = 0
+       ORDER BY rf."createdAt" DESC`
+    )
+    .all() as { id: number; employeeId: number; field: string; rawValue: string; reason: string; employeeFullName: string }[];
   const needsReviewCount = new Set(openFlags.map((f) => f.employeeId)).size;
   const reviewCountByTab: Record<string, number> = {};
   for (const f of openFlags) {
@@ -244,7 +248,7 @@ export async function getDashboardData(): Promise<DashboardData> {
   const flaggedFields: FlaggedField[] = openFlags.map((f) => ({
     id: f.id,
     employeeId: f.employeeId,
-    employeeName: f.employee.fullName || "(No name on file)",
+    employeeName: f.employeeFullName || "(No name on file)",
     field: f.field,
     rawValue: f.rawValue,
     reason: f.reason,

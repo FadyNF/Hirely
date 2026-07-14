@@ -9,7 +9,7 @@
 
 import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { findUserById, updateUser, deleteUser } from "@/lib/users";
 import { requireRootUserId } from "@/lib/requireAuth";
 import { sendApprovalEmail } from "@/lib/mailer";
 
@@ -27,7 +27,7 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ userId
 
   let user;
   try {
-    user = await prisma.user.findUnique({ where: { id } });
+    user = findUserById(id);
     if (!user) return NextResponse.json({ error: "No such user." }, { status: 404 });
     if (user.role === "root") {
       // The root's own row is bootstrapped as approved by ensureRootAdminFromEnv;
@@ -42,10 +42,7 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ userId
     const magicLoginTokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
     const magicLoginTokenExpiresAt = new Date(Date.now() + MAGIC_LOGIN_TTL_MS);
 
-    await prisma.user.update({
-      where: { id },
-      data: { approved: true, magicLoginTokenHash, magicLoginTokenExpiresAt },
-    });
+    updateUser(id, { approved: true, magicLoginTokenHash, magicLoginTokenExpiresAt });
 
     const magicLink = new URL(`/api/auth/magic-login?token=${rawToken}`, request.url).toString();
 
@@ -79,14 +76,15 @@ export async function DELETE(request: NextRequest, ctx: { params: Promise<{ user
   }
 
   try {
-    const user = await prisma.user.findUnique({ where: { id } });
+    const user = findUserById(id);
     if (!user) return NextResponse.json({ error: "No such user." }, { status: 404 });
     if (user.role === "root") {
       return NextResponse.json({ error: "The root account can't be deleted here." }, { status: 400 });
     }
     // Hard-delete: any support requests they filed have onDelete: SetNull
-    // so their FK becomes null but the row survives with the email snapshot.
-    await prisma.user.delete({ where: { id } });
+    // so their FK becomes null but the row survives with the email snapshot
+    // (enforced by lib/db.ts's PRAGMA foreign_keys = ON).
+    deleteUser(id);
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("Decline user error:", error);

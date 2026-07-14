@@ -3,7 +3,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
-import { prisma } from "@/lib/prisma";
+import { findUserById, updateUser } from "@/lib/users";
 import { signTokenPair, setAuthCookies } from "@/lib/authTokens";
 import { REFRESH_TOKEN_COOKIE } from "@/lib/requireAuth";
 
@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
     // proves WE issued it at some point, but only checking our stored
     // hash tells us whether it's still the CURRENT one (i.e. hasn't
     // been rotated out or logged out already).
-    const user = await prisma.user.findUnique({ where: { id: payload.userId } });
+    const user = findUserById(payload.userId);
     if (!user || !user.refreshTokenHash) {
       return NextResponse.json(
         { error: "Invalid or expired refresh token." },
@@ -71,10 +71,7 @@ export async function POST(request: NextRequest) {
     // Overwrite the stored hash — this is the actual "rotation" step.
     // The old refresh token's hash no longer matches anything on file,
     // so submitting it again from now on will fail Step 2 above.
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { refreshTokenHash: newRefreshTokenHash },
-    });
+    updateUser(user.id, { refreshTokenHash: newRefreshTokenHash });
 
     const response = NextResponse.json({ ok: true });
     setAuthCookies(response, newAccessToken, newRefreshToken);

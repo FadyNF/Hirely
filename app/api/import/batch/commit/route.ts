@@ -14,8 +14,9 @@
 // blocking the row.
 
 import { NextRequest, NextResponse } from "next/server";
-import { prisma, markEmployeeEmbeddingDirty } from "@/lib/prisma";
-import { Prisma } from "@/lib/generated/prisma/client";
+import { db } from "@/lib/db";
+import { createEmployeeWithRelations, type RelationValues } from "@/lib/employees";
+import { markEmployeeEmbeddingDirty } from "@/lib/employeeCertificates";
 import { requireUserId } from "@/lib/requireAuth";
 import { validateBatchRow, type FieldIssue } from "@/lib/chatbotValidate";
 
@@ -52,24 +53,22 @@ export async function POST(request: NextRequest) {
   for (const row of rows) {
     const { employeeData, relationData, issues } = validateBatchRow(row.data || {});
 
-    const relationCreates: Record<string, unknown> = {};
+    const relationCreates: RelationValues = {};
     for (const key of RELATION_KEYS) {
       const entries = relationData[key];
-      if (entries && entries.length > 0) relationCreates[key] = { create: entries };
+      if (entries && entries.length > 0) relationCreates[key] = entries as Record<string, unknown>[];
     }
 
     const create = async (scalarData: Record<string, unknown>, flagIssues: FieldIssue[]) => {
-      const employee = await prisma.employee.create({ data: { ...scalarData, ...relationCreates } as never });
-      await markEmployeeEmbeddingDirty(employee.id).catch(() => {});
+      const employee = createEmployeeWithRelations(scalarData, relationCreates);
+      markEmployeeEmbeddingDirty(employee.id);
       if (flagIssues.length > 0) {
-        await prisma.reviewFlag.createMany({
-          data: flagIssues.map((issue) => ({
-            employeeId: employee.id,
-            field: issueField(issue),
-            rawValue: issueRawValue(issue),
-            reason: issue.reason,
-          })),
-        });
+        const insertFlag = db.prepare(
+          `INSERT INTO "ReviewFlag" ("employeeId", "field", "rawValue", "reason") VALUES (?, ?, ?, ?)`
+        );
+        for (const issue of flagIssues) {
+          insertFlag.run(employee.id, issueField(issue), issueRawValue(issue), issue.reason);
+        }
       }
       return employee;
     };
@@ -93,14 +92,12 @@ export async function POST(request: NextRequest) {
         if (currentIssues.length > 0) flagged++;
         ok = true;
       } catch (error) {
-        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-          // The better-sqlite3 adapter leaves meta.target undefined and
-          // instead names the column deeper in meta (…constraint.fields /
-          // the driver's "UNIQUE constraint failed: Employee.companyID"
-          // message), so match against the whole meta blob rather than
-          // target alone.
-          const blob = JSON.stringify(error.meta ?? "").toLowerCase();
-          const collidingField = blob.includes("companyid") ? "companyID" : blob.includes("nationalid") ? "nationalId" : null;
+        if (error instanceof Error && (error as { code?: string }).code === "SQLITE_CONSTRAINT_UNIQUE") {
+          // better-sqlite3's own error message already names the colliding
+          // column directly (e.g. "UNIQUE constraint failed:
+          // Employee.companyID").
+          const message = error.message.toLowerCase();
+          const collidingField = message.includes("companyid") ? "companyID" : message.includes("nationalid") ? "nationalId" : null;
 
           if (collidingField && collidingField in scalarData) {
             const label = collidingField === "companyID" ? "Company ID" : "National ID";

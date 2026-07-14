@@ -1,5 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
-import { prisma } from "./prisma";
+import { db } from "./db";
 
 const SEMANTIC_WEIGHT = 0.7;
 const BM25_WEIGHT = 0.3;
@@ -135,12 +135,11 @@ export async function matchTopProfiles(
   jobDescription: string,
   topN?: number
 ) {
-  const dbProfiles = await prisma.$queryRaw<
-    { employeeId: bigint | number; allexperience: string; embedding: string }[]
-  >`
-    SELECT "employeeId", "allexperience", "embedding"
-    FROM "EmployeeEmbedding"
-  `;
+  const dbProfiles = db.prepare(`SELECT "employeeId", "allexperience", "embedding" FROM "EmployeeEmbedding"`).all() as {
+    employeeId: number;
+    allexperience: string;
+    embedding: string;
+  }[];
 
   if (!dbProfiles || dbProfiles.length === 0) {
     return [];

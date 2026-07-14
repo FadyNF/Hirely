@@ -829,7 +829,7 @@
 
         <!-- NAV -->
         <nav>
-            <a href="#hero" class="nav-logo">
+            <a href="/" class="nav-logo">
                 <img
                     src="/images/Wedy.ai_Logo.png"
                     alt="Wedy.ai"
@@ -851,13 +851,16 @@
             </a>
             <ul class="nav-links">
                 <li><a href="#how-it-works">How It Works</a></li>
-                <li><a href="#hero">Features</a></li>
             </ul>
-            <div class="nav-actions">
+            <div class="nav-actions" id="nav-actions-logged-out">
                 <a href="/login" data-auth="login" class="btn-ghost">Sign in</a>
                 <a href="/register" data-auth="register" class="btn-primary"
                     >Sign Up</a
                 >
+            </div>
+            <div class="nav-actions" id="nav-actions-logged-in" style="display: none">
+                <ul class="nav-links" id="app-nav-links"></ul>
+                <a href="/app" class="btn-primary">Go to Dashboard</a>
             </div>
         </nav>
 
@@ -901,16 +904,19 @@
                         <span class="check-icon"
                             ><svg viewBox="0 0 12 12">
                                 <polyline points="2,6 5,9 10,3" /></svg></span
-                        >Coming soon: instant matching against new openings
+                        >AI-powered matching against new job openings
                     </li>
                 </ul>
-                <div class="hero-actions">
+                <div class="hero-actions" id="hero-actions-logged-out">
                     <a href="/register" data-auth="register" class="btn-hero"
                         >Get Started</a
                     >
                     <a href="/login" data-auth="login" class="btn-hero-sec"
                         >Sign in</a
                     >
+                </div>
+                <div class="hero-actions" id="hero-actions-logged-in" style="display: none">
+                    <a href="/app" class="btn-hero">Go to Dashboard</a>
                 </div>
                 <div class="hero-no-card">
                     <svg viewBox="0 0 24 24" stroke-width="2">
@@ -1034,12 +1040,9 @@
         <!-- FOOTER -->
         <footer>
             <div class="footer-inner reveal">
-                <a href="#hero" class="footer-logo">Hirely</a>
+                <a href="/" class="footer-logo">Hirely</a>
                 <div class="footer-links">
                     <a href="#how-it-works">How It Works</a>
-                    <a href="#hero">Features</a>
-                    <a href="#">Privacy</a>
-                    <a href="#">Terms</a>
                 </div>
                 <div style="text-align: right">
                     <div style="font-size: 0.82rem; color: #888">
@@ -1057,6 +1060,54 @@
             document
                 .querySelectorAll('[data-auth="register"]')
                 .forEach((a) => (a.href = APP_URL + "/register"));
+
+            // If the visitor already has a session, the nav's job is to get
+            // them into the app, not to sign up again — swap the Sign
+            // in/Sign up CTAs (header + hero) for links into the app itself.
+            (function showAppNavIfLoggedIn() {
+                fetch("/api/auth/me")
+                    .then((res) => (res.ok ? res.json() : null))
+                    .then((user) => {
+                        if (!user) return;
+
+                        document.getElementById(
+                            "nav-actions-logged-out",
+                        ).style.display = "none";
+                        document.getElementById(
+                            "hero-actions-logged-out",
+                        ).style.display = "none";
+                        document.getElementById(
+                            "nav-actions-logged-in",
+                        ).style.display = "flex";
+                        document.getElementById(
+                            "hero-actions-logged-in",
+                        ).style.display = "flex";
+
+                        const links = [
+                            { href: "/app", label: "Dashboard" },
+                            { href: "/app/records", label: "Records" },
+                            { href: "/app/chatbot", label: "Chatbot" },
+                            { href: "/app/matching", label: "Job Matching" },
+                        ];
+                        if (user.role === "root") {
+                            links.push({ href: "/app/admin", label: "Admin" });
+                        }
+
+                        const list = document.getElementById("app-nav-links");
+                        links.forEach(({ href, label }) => {
+                            const li = document.createElement("li");
+                            const a = document.createElement("a");
+                            a.href = href;
+                            a.textContent = label;
+                            li.appendChild(a);
+                            list.appendChild(li);
+                        });
+                    })
+                    .catch(() => {
+                        // No session, or the request itself failed — either way,
+                        // the logged-out nav (already visible) is the right state.
+                    });
+            })();
 
             // Counts the completion percentage up from 0 to 82, timed to match
             // the CSS .record-progress-fill animation exactly (same 1.8s delay,

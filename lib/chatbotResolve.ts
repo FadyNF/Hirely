@@ -5,7 +5,7 @@
 // (for a write, zero means "make a new one"; for a read, zero means
 // "no such person"). One shared search function, two thin wrappers.
 
-import { prisma } from "./prisma";
+import { db } from "./db";
 import type { ExtractedEmployeeData } from "./gemini";
 
 export interface EmployeeMatch {
@@ -15,15 +15,15 @@ export interface EmployeeMatch {
   nationalId: string | null;
 }
 
+const MATCH_COLUMNS = `"id", "fullName", "email", "nationalId"`;
+
 async function searchByName(name: string): Promise<EmployeeMatch[]> {
   // SQLite doesn't support case-insensitive matching the way Postgres
   // does, so we compare in plain JavaScript — fine at this scale.
   // Substring match (not exact equality) so a first name or partial
   // name — e.g. "wael" — matches "Wael Dawoud Bakry"; multiple hits
   // are surfaced through the existing disambiguate path, not lost.
-  const all = await prisma.employee.findMany({
-    select: { id: true, fullName: true, email: true, nationalId: true },
-  });
+  const all = db.prepare(`SELECT ${MATCH_COLUMNS} FROM "Employee"`).all() as EmployeeMatch[];
   const target = name.trim().toLowerCase();
   return all.filter((e) => e.fullName.trim().toLowerCase().includes(target));
 }
@@ -35,17 +35,15 @@ async function findMatches(extracted: ExtractedEmployeeData): Promise<EmployeeMa
 
     const asId = Number(hint);
     if (Number.isInteger(asId) && String(asId) === hint) {
-      const employee = await prisma.employee.findUnique({
-        where: { id: asId },
-        select: { id: true, fullName: true, email: true, nationalId: true },
-      });
+      const employee = db.prepare(`SELECT ${MATCH_COLUMNS} FROM "Employee" WHERE "id" = ?`).get(asId) as
+        | EmployeeMatch
+        | undefined;
       if (employee) return [employee];
     }
 
-    const byNationalId = await prisma.employee.findFirst({
-      where: { nationalId: hint },
-      select: { id: true, fullName: true, email: true, nationalId: true },
-    });
+    const byNationalId = db
+      .prepare(`SELECT ${MATCH_COLUMNS} FROM "Employee" WHERE "nationalId" = ? LIMIT 1`)
+      .get(hint) as EmployeeMatch | undefined;
     if (byNationalId) return [byNationalId];
 
     // identifierHint can also just BE a name — e.g. inferred from

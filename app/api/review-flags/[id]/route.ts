@@ -6,7 +6,7 @@
 // section.
 
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { db } from "@/lib/db";
 import { requireUserId } from "@/lib/requireAuth";
 
 export async function PATCH(request: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -20,10 +20,9 @@ export async function PATCH(request: NextRequest, ctx: { params: Promise<{ id: s
     return NextResponse.json({ error: "Invalid id." }, { status: 400 });
   }
 
-  try {
-    await prisma.reviewFlag.update({ where: { id: flagId }, data: { resolved: true } });
-    return NextResponse.json({ ok: true });
-  } catch {
+  const result = db.prepare(`UPDATE "ReviewFlag" SET "resolved" = 1 WHERE "id" = ?`).run(flagId);
+  if (result.changes === 0) {
     return NextResponse.json({ error: "That flag no longer exists." }, { status: 404 });
   }
+  return NextResponse.json({ ok: true });
 }

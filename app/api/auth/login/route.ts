@@ -2,7 +2,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import { prisma } from "@/lib/prisma";
+import { findUserByEmail, updateUser } from "@/lib/users";
 import { signTokenPair, setAuthCookies } from "@/lib/authTokens";
 import { sendVerificationEmail } from "@/lib/mailer";
 import { ensureRootAdminFromEnv, isRootEmail } from "@/lib/rootAdmin";
@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
     // admins and root, without a separate "is this the root?" branch.
     if (isRootEmail(email)) await ensureRootAdminFromEnv();
 
-    const user = await prisma.user.findUnique({ where: { email } });
+    const user = findUserByEmail(email);
 
     // Deliberately identical error for "no such user" and "wrong password" —
     // same reasoning as before: don't let a login form confirm which emails
@@ -59,10 +59,7 @@ export async function POST(request: NextRequest) {
       const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
       const codeExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { verificationCode, codeExpiresAt },
-      });
+      updateUser(user.id, { verificationCode, codeExpiresAt });
 
       // Same email the register/resend-code routes send — the DB now
       // holds a fresh code, so the user needs it actually delivered,
@@ -94,10 +91,7 @@ export async function POST(request: NextRequest) {
     // ---- All checks passed — issue tokens, same as verify-code did ----
     const { accessToken, refreshToken, refreshTokenHash } = signTokenPair(user.id, user.email);
 
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { refreshTokenHash },
-    });
+    updateUser(user.id, { refreshTokenHash });
 
     const response = NextResponse.json({
       user: { id: user.id, email: user.email, role: user.role },

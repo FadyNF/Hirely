@@ -9,19 +9,18 @@
 // even after the user clicks Logout.
 
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { updateUser } from "@/lib/users";
 import { requireUserId } from "@/lib/requireAuth";
 import { clearAuthCookies } from "@/lib/authTokens";
 
 export async function POST(request: Request) {
   const userId = requireUserId(request);
   if (userId) {
-    await prisma.user.update({
-      where: { id: userId },
-      data: { refreshTokenHash: null },
-    }).catch(() => {
+    try {
+      updateUser(userId, { refreshTokenHash: null });
+    } catch {
       // Best-effort — even if this fails, still clear the cookies below.
-    });
+    }
   }
 
   const response = NextResponse.json({ ok: true });

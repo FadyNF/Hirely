@@ -6,7 +6,7 @@
 // anyone read their message.
 
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { updateSupportRequestStatus } from "@/lib/supportRequests";
 import { requireRootUserId } from "@/lib/requireAuth";
 import { sendSupportResolvedEmail } from "@/lib/mailer";
 
@@ -35,13 +35,10 @@ export async function PATCH(request: NextRequest, ctx: { params: Promise<{ id: s
 
   let updated;
   try {
-    updated = await prisma.supportRequest.update({
-      where: { id: requestId },
-      // Only touch rootReply on an actual reply value — reopening (or
-      // resolving without typing anything) shouldn't erase a reply
-      // written on a previous pass.
-      data: reply !== undefined ? { status, rootReply: reply } : { status },
-    });
+    // Only touch rootReply on an actual reply value — reopening (or
+    // resolving without typing anything) shouldn't erase a reply
+    // written on a previous pass.
+    updated = updateSupportRequestStatus(requestId, status, reply);
   } catch {
     return NextResponse.json({ error: "That request no longer exists." }, { status: 404 });
   }
