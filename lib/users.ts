@@ -7,6 +7,7 @@
 // ways on read/write, the same conversion Prisma used to do for us.
 
 import { db } from "./db";
+import type { Role } from "./roles";
 
 export interface User {
   id: number;
@@ -16,7 +17,7 @@ export interface User {
   verificationCode: string | null;
   codeExpiresAt: Date | null;
   refreshTokenHash: string | null;
-  role: string;
+  role: Role;
   approved: boolean;
   magicLoginTokenHash: string | null;
   magicLoginTokenExpiresAt: Date | null;
@@ -47,7 +48,7 @@ function mapUser(row: UserRow): User {
     verificationCode: row.verificationCode,
     codeExpiresAt: row.codeExpiresAt ? new Date(row.codeExpiresAt) : null,
     refreshTokenHash: row.refreshTokenHash,
-    role: row.role,
+    role: row.role as Role,
     approved: !!row.approved,
     magicLoginTokenHash: row.magicLoginTokenHash,
     magicLoginTokenExpiresAt: row.magicLoginTokenExpiresAt ? new Date(row.magicLoginTokenExpiresAt) : null,
@@ -76,6 +77,10 @@ export function createUser(input: {
   verificationCode?: string | null;
   codeExpiresAt?: Date | null;
 }): User {
+  // role/approved aren't passed here — every fresh signup relies on the
+  // column defaults ('employee' / true, see the migration that changed
+  // them), since a normal registration is the only caller of this
+  // function today. Promotion to admin happens later, via updateUser.
   const info = db
     .prepare(`INSERT INTO "User" ("email", "passwordHash", "verificationCode", "codeExpiresAt") VALUES (?, ?, ?, ?)`)
     .run(
@@ -103,7 +108,7 @@ export function updateUser(
     verificationCode: string | null;
     codeExpiresAt: Date | null;
     refreshTokenHash: string | null;
-    role: string;
+    role: Role;
     approved: boolean;
     magicLoginTokenHash: string | null;
     magicLoginTokenExpiresAt: Date | null;
@@ -137,11 +142,25 @@ export function upsertRootUser(input: { email: string; passwordHash: string }): 
   ).run(input.email, input.passwordHash);
 }
 
-export function findPendingAdmins(): { id: number; email: string; emailVerified: boolean; createdAt: Date }[] {
+// Promotion candidates for the root console's "Promote to admin" list —
+// every plain employee, not a pending-approval queue (there's no approval
+// step left to be pending on; see the onboarding rewrite). Employee's
+// fullName is joined in since the console shows whatever name the
+// employee has filled in themselves (falling back to "(No name on file)"
+// in the UI, the same convention used by the Dashboard's flagged fields).
+export function findEmployeeUsers(): { id: number; email: string; fullName: string | null; createdAt: Date }[] {
   const rows = db
     .prepare(
-      `SELECT "id", "email", "emailVerified", "createdAt" FROM "User" WHERE "approved" = 0 AND "role" = 'admin' ORDER BY "createdAt" ASC`
+      `SELECT u."id", u."email", u."createdAt", e."fullName" as "employeeFullName"
+       FROM "User" u LEFT JOIN "Employee" e ON e."userId" = u."id"
+       WHERE u."role" = 'employee'
+       ORDER BY u."createdAt" ASC`
     )
-    .all() as { id: number; email: string; emailVerified: number; createdAt: string }[];
-  return rows.map((r) => ({ id: r.id, email: r.email, emailVerified: !!r.emailVerified, createdAt: new Date(r.createdAt) }));
+    .all() as { id: number; email: string; createdAt: string; employeeFullName: string | null }[];
+  return rows.map((r) => ({
+    id: r.id,
+    email: r.email,
+    fullName: r.employeeFullName || null,
+    createdAt: new Date(r.createdAt),
+  }));
 }

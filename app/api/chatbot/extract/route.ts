@@ -19,7 +19,7 @@ import { resolveEmployeeMatches, resolveEmployeeQuery } from "@/lib/chatbotResol
 import { validateExtractedFields, validateFieldValue } from "@/lib/chatbotValidate";
 import { CREATE_REQUIRED_FIELDS } from "@/lib/tabConfig";
 import { getEmployeeById } from "@/lib/employees";
-import { requireUserId } from "@/lib/requireAuth";
+import { requireCallerContext } from "@/lib/requireAuth";
 
 // Finds the next field to ask about, skipping anything the admin has
 // explicitly typed "skip" for. __skipped travels inside `data` itself
@@ -38,8 +38,27 @@ function stripInternal(data: Record<string, unknown>) {
 
 export async function POST(request: NextRequest) {
   try {
-    if (!requireUserId(request)) {
+    const caller = await requireCallerContext(request);
+    if (!caller) {
       return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+    }
+
+    // The scoped "Assistant" chatbot (self-service employee view): there's
+    // exactly one possible target — the caller's own linked record — so
+    // this skips lib/chatbotResolve.ts entirely rather than letting an
+    // employee-role message search/match across the WHOLE Employee table
+    // by name/ID like the admin chatbot does.
+    const isEmployeeCaller = caller.role === "employee";
+    let ownMatch: { id: number; fullName: string; email: string | null; nationalId: string | null } | null = null;
+    if (isEmployeeCaller) {
+      if (!caller.employeeId) {
+        return NextResponse.json({ error: "No linked employee record found for this account." }, { status: 403 });
+      }
+      const own = await getEmployeeById(caller.employeeId);
+      if (!own) {
+        return NextResponse.json({ error: "No linked employee record found for this account." }, { status: 403 });
+      }
+      ownMatch = { id: own.id, fullName: own.fullName, email: own.email, nationalId: own.nationalId };
     }
 
     const { message, existingDraft, expectedField, history, lastEmployee } = await request.json();
@@ -116,6 +135,18 @@ export async function POST(request: NextRequest) {
 
     // ---- Read: a lookup question, not a write ----
     if (extracted.intent === "read") {
+      // Scoped assistant: there's only ever one person to answer about —
+      // skip resolveEmployeeQuery's whole-table search entirely.
+      if (isEmployeeCaller) {
+        const employee = await getEmployeeById(ownMatch!.id);
+        return NextResponse.json({
+          action: "info",
+          found: true,
+          employee,
+          requestedFields: extracted.requestedFields,
+        });
+      }
+
       const { action: readAction, matches } = await resolveEmployeeQuery(extracted);
 
       if (readAction === "notFound") {
@@ -134,6 +165,13 @@ export async function POST(request: NextRequest) {
         employee,
         requestedFields: extracted.requestedFields,
       });
+    }
+
+    // ---- Write: the scoped assistant always targets the caller's own
+    // record — no search, no disambiguation, no create (they already
+    // have one, made at signup). ----
+    if (isEmployeeCaller) {
+      return NextResponse.json({ action: "update", matches: [ownMatch], data: newData, warnings });
     }
 
     const { action, matches } = await resolveEmployeeMatches(extracted);

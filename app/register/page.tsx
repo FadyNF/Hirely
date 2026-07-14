@@ -6,14 +6,14 @@ import { AuthProvider, useAuth } from '@/context';
 import { RegisterScreen } from '@/components/auth';
 
 function RegisterInner() {
-  const { isAuthenticated, isAuthLoading } = useAuth();
+  const { isAuthenticated, isAuthLoading, user } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
     if (!isAuthLoading && isAuthenticated) {
-      router.replace('/app');
+      router.replace(user?.role === 'employee' ? '/app/employee' : '/app');
     }
-  }, [isAuthLoading, isAuthenticated, router]);
+  }, [isAuthLoading, isAuthenticated, user, router]);
 
   return <RegisterScreen onSwitchToLogin={() => router.push('/login')} />;
 }

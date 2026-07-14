@@ -16,9 +16,9 @@
 // visitor away from /login.
 
 import { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
+import type { Role } from '@/lib/roles';
 
 const PENDING_VERIFICATION_KEY = 'foundry-pending-verification';
-const PENDING_APPROVAL_KEY = 'foundry-pending-approval';
 
 // sessionStorage only exists in the browser, not during server-side
 // rendering — this guards against crashing when Next.js renders on the
@@ -38,22 +38,20 @@ export interface User {
   id: number;
   email: string;
   emailVerified: boolean;
-  // "admin" | "root" — root is the env-configured account that can
-  // approve pending admins and triage support requests; every other
-  // logged-in user is a plain admin. Determined server-side from the
-  // User.role DB column, never trusted from the client.
-  role: string;
+  // "employee" (default for every fresh signup) | "admin" (root promotes
+  // an employee to this) | "root" — the env-configured account that can
+  // promote employees and triage support requests. Determined server-side
+  // from the User.role DB column, never trusted from the client.
+  role: Role;
 }
 
 // Result surface for login/verifyCode — callers need to distinguish
-// "logged in" from "OTP still needed" from "waiting for approval" to
-// route the user to the right screen. Kept as a plain union rather than
-// throwing, since these are all expected outcomes of a normal flow, not
-// exceptional errors.
+// "logged in" from "OTP still needed" to route the user to the right
+// screen. Kept as a plain union rather than throwing, since these are
+// both expected outcomes of a normal flow, not exceptional errors.
 export type AuthOutcome =
   | { status: 'ok' }
-  | { status: 'verification_required' }
-  | { status: 'pending_approval'; email: string };
+  | { status: 'verification_required' };
 
 interface AuthContextType {
   user: User | null;
@@ -67,13 +65,6 @@ interface AuthContextType {
   verifyCode: (email: string, code: string) => Promise<AuthOutcome>;
   resendCode: (email: string) => Promise<void>;
   clearPendingVerification: () => void;
-  // Email of the just-verified account that's now waiting for root
-  // approval. Same lifetime pattern as pendingVerification — persisted
-  // to sessionStorage so a reload on the "waiting for approval" screen
-  // doesn't kick the user back to /login. Cleared when they log in for
-  // real (once approved) or explicitly reset via clearPendingApproval.
-  pendingApproval: { email: string } | null;
-  clearPendingApproval: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -93,15 +84,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return null;
     }
   });
-  const [pendingApproval, setPendingApproval] = useState<{ email: string } | null>(() => {
-    try {
-      const raw = storage?.getItem(PENDING_APPROVAL_KEY);
-      return raw ? (JSON.parse(raw) as { email: string }) : null;
-    } catch {
-      return null;
-    }
-  });
-
   // ---- On mount: ask the server who (if anyone) the access-token cookie
   // belongs to. The cookie is httpOnly — invisible to this code — so this
   // request is the only way to find out. ----
@@ -143,15 +125,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [pendingVerification, isHydrated]);
 
-  useEffect(() => {
-    if (!isHydrated) return;
-    if (pendingApproval) {
-      storage?.setItem(PENDING_APPROVAL_KEY, JSON.stringify(pendingApproval));
-    } else {
-      storage?.removeItem(PENDING_APPROVAL_KEY);
-    }
-  }, [pendingApproval, isHydrated]);
-
   // ---- authFetch: cookies are attached automatically by the browser now,
   // so this no longer manages a token — it just retries once through
   // /api/auth/refresh on a 401, same behavior as before. ----
@@ -184,13 +157,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return { status: 'verification_required' };
     }
 
-    if (data.status === 'pending_approval') {
-      setPendingApproval({ email: data.email });
-      return { status: 'pending_approval', email: data.email };
-    }
-
     setUser(data.user);
-    setPendingApproval(null);
     return { status: 'ok' };
   }, []);
 
@@ -219,15 +186,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     if (!res.ok) throw new Error(data.error || 'Verification failed.');
 
-    if (data.status === 'pending_approval') {
-      setPendingVerification(null);
-      setPendingApproval({ email: data.email });
-      return { status: 'pending_approval', email: data.email };
-    }
-
     setUser(data.user);
     setPendingVerification(null);
-    setPendingApproval(null);
     return { status: 'ok' };
   }, []);
 
@@ -251,10 +211,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setPendingVerification(null);
   }, []);
 
-  const clearPendingApproval = useCallback(() => {
-    setPendingApproval(null);
-  }, []);
-
   // ---- logout ----
   // Now a real server call: client-side JS can't read or clear an
   // httpOnly cookie itself, so logging out has to ask the server to
@@ -263,7 +219,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
     setUser(null);
     setPendingVerification(null);
-    setPendingApproval(null);
   }, []);
 
   return (
@@ -280,8 +235,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         verifyCode,
         resendCode,
         clearPendingVerification,
-        pendingApproval,
-        clearPendingApproval,
       }}
     >
       {children}

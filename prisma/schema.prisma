@@ -24,18 +24,21 @@ model User {
 
   refreshTokenHash String?
 
-  // "admin" is any regular user; "root" is the single privileged account
-  // seeded from ROOT_ADMIN_EMAIL / ROOT_ADMIN_PASSWORD env vars (see
-  // lib/rootAdmin.ts). The root can approve/decline pending admins and
-  // triage support requests; regular admins can't.
-  role String @default("admin")
+  // "employee" is what every fresh signup becomes today — a self-service
+  // user scoped to their own linked Employee record (see `employee`
+  // relation below). "admin" is granted by root promoting an employee
+  // from the console (no self-registration path to it anymore). "root"
+  // is the single privileged account seeded from ADMIN_EMAIL/ADMIN_PASS
+  // env vars (see lib/rootAdmin.ts). The root can promote employees to
+  // admin and triage support requests; regular admins can't.
+  role String @default("employee")
 
-  // Approval gate that runs AFTER email verification: even a user with a
-  // valid password + verified email can't log in until root approves them.
-  // Existing users are backfilled to `true` in the migration so nobody
-  // gets locked out on deploy. The root row upserted from env is always
-  // created with `true` — the root doesn't approve itself.
-  approved Boolean @default(false)
+  // Legacy approval gate from the old "register -> pending admin approval"
+  // flow. Every account created today (employee signup, or an employee
+  // promoted to admin) is `true` from the moment it exists — there is no
+  // approval step left to gate on. Column kept only so existing rows /
+  // the login route's defensive check don't need a data migration.
+  approved Boolean @default(true)
 
   // One-click login link sent by email the moment root approves a pending
   // admin — lets them land straight on the dashboard from that email
@@ -49,6 +52,12 @@ model User {
   createdAt DateTime @default(now())
 
   supportRequests SupportRequest[]
+
+  // 1:1 link to this user's own HR record, created alongside the User row
+  // at signup (see app/api/auth/register/route.ts). Nullable + SetNull on
+  // the Employee side so an Employee row (real HR data) survives even if
+  // the login account is ever removed — it just becomes unlinked.
+  employee Employee?
 }
 
 // A message from a regular admin to the root admin — either reporting a
@@ -121,6 +130,14 @@ model Employee {
   yearsExpElsewedy Int?
   totalExperience  Int?
   createdAt        DateTime @default(now())
+
+  // Links this HR record to the self-service login account that owns it.
+  // Created together with the User row at signup (a fresh employee always
+  // gets a blank Employee row, filled in later via the self-service view).
+  // Nullable + unique: most historical/imported records have no login at
+  // all, and at most one User can own a given Employee.
+  userId Int?  @unique
+  user   User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   // These five are the "one employee, many entries" relationships —
   // Prisma calls this a one-to-many relation. Each array field here

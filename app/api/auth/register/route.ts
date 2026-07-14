@@ -9,6 +9,8 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { sendVerificationEmail } from "@/lib/mailer";
 import { findUserByEmail, createUser, deleteUser } from "@/lib/users";
+import { createBlankEmployeeForUser, deleteEmployee } from "@/lib/employees";
+import { runInTransaction } from "@/lib/db";
 import { isRootEmail } from "@/lib/rootAdmin";
 
 // Generates a random 6-digit code, e.g. "482913".
@@ -64,22 +66,33 @@ export async function POST(request: NextRequest) {
     const verificationCode = generateOtpCode();
     const codeExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes from now
 
-    // ---- Create the user, then send the email ----
-    // better-sqlite3 transactions are synchronous, so this can't be one
-    // db.transaction() wrapping an awaited email send the way Prisma's
-    // $transaction could. Instead: insert first, then send — if
-    // sendVerificationEmail throws (bad SMTP creds, network blip, Gmail
-    // rate limit), manually delete the just-created row so a failed send
-    // doesn't leave a permanent, half-created user behind (which would
-    // make every future registration attempt with this email hit the
-    // "already exists" check with no way to actually finish signing up).
-    const created = createUser({ email, passwordHash, verificationCode, codeExpiresAt });
+    // ---- Create the user AND their linked (blank) Employee record, then
+    // send the email ----
+    // Every fresh signup lands directly in the self-service Employee view
+    // (see CLAUDE.md's onboarding notes) — no more "pending admin
+    // approval" default. That view needs an Employee row to edit from
+    // the start, so one is created here, in the same transaction as the
+    // User row, linked via Employee.userId. better-sqlite3 transactions
+    // are synchronous, so this can't be one db.transaction() wrapping an
+    // awaited email send the way Prisma's $transaction could. Instead:
+    // insert first, then send — if sendVerificationEmail throws (bad SMTP
+    // creds, network blip, Gmail rate limit), manually delete both
+    // just-created rows so a failed send doesn't leave a permanent,
+    // half-created account behind (which would make every future
+    // registration attempt with this email hit the "already exists" check
+    // with no way to actually finish signing up).
+    const created = runInTransaction(() => {
+      const newUser = createUser({ email, passwordHash, verificationCode, codeExpiresAt });
+      const employee = createBlankEmployeeForUser(newUser.id, newUser.email);
+      return { user: newUser, employeeId: employee.id };
+    });
     let user;
     try {
       await sendVerificationEmail(email, verificationCode);
-      user = created;
+      user = created.user;
     } catch (sendError) {
-      deleteUser(created.id);
+      deleteEmployee(created.employeeId);
+      deleteUser(created.user.id);
       throw sendError;
     }
 

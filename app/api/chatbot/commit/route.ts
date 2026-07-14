@@ -13,7 +13,7 @@ import {
   type RelationValues,
 } from "@/lib/employees";
 import { markEmployeeEmbeddingDirty } from "@/lib/employeeCertificates";
-import { requireUserId } from "@/lib/requireAuth";
+import { requireCallerContext } from "@/lib/requireAuth";
 import { validateExtractedFields } from "@/lib/chatbotValidate";
 
 // Fields that live directly on the Employee row (not in a related table).
@@ -42,11 +42,31 @@ function buildScalarData(data: Record<string, unknown>) {
 
 export async function POST(request: NextRequest) {
   try {
-    if (!requireUserId(request)) {
+    const caller = await requireCallerContext(request);
+    if (!caller) {
       return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
     }
 
-    const { action, employeeId, data, replaceRelations, resolveFlagId } = await request.json();
+    const body = await request.json();
+    const { action, data, replaceRelations, resolveFlagId } = body;
+    let employeeId: number | undefined = body.employeeId;
+
+    // An employee-role caller can only ever update their OWN linked
+    // record — never trust employeeId/action from the request body for
+    // that role. This closes a real authorization gap: requireCallerContext
+    // only proves "some valid login," not "whose record this is," so
+    // without this check any authenticated employee could pass an
+    // arbitrary employeeId here (devtools, curl) and edit someone else's
+    // data. admin/root behavior below is completely unchanged.
+    if (caller.role === "employee") {
+      if (!caller.employeeId) {
+        return NextResponse.json({ error: "No linked employee record found for this account." }, { status: 403 });
+      }
+      if (action !== "update") {
+        return NextResponse.json({ error: "Employees can only update their own record." }, { status: 403 });
+      }
+      employeeId = caller.employeeId;
+    }
 
     if (action !== "create" && action !== "update") {
       return NextResponse.json({ error: "Unsupported action." }, { status: 400 });

@@ -75,6 +75,9 @@ export interface EmployeeRow {
   yearsExpElsewedy: number | null;
   totalExperience: number | null;
   createdAt: string;
+  // Links this record to the self-service login account that owns it, if
+  // any (most historical/imported records have no linked User at all).
+  userId: number | null;
 }
 
 export interface EmployeeWithRelations extends EmployeeRow {
@@ -126,6 +129,37 @@ export async function getEmployeeById(id: number): Promise<EmployeeWithRelations
   const employee = db.prepare(`SELECT * FROM "Employee" WHERE "id" = ?`).get(id) as EmployeeRow | undefined;
   if (!employee) return null;
   return attachRelations([employee])[0];
+}
+
+// Resolves a logged-in User to the Employee record they own, for the
+// self-service view and every route that must scope a caller to their own
+// data. Not folded into SCALAR_COLUMNS/createEmployeeWithRelations's
+// generic write path on purpose — `userId` is a link established once at
+// signup (see createBlankEmployeeForUser below), never something a
+// chatbot/admin edit payload should be able to touch.
+export function getEmployeeIdForUserId(userId: number): number | null {
+  const row = db.prepare(`SELECT "id" FROM "Employee" WHERE "userId" = ?`).get(userId) as { id: number } | undefined;
+  return row?.id ?? null;
+}
+
+// Creates the blank Employee record a fresh signup is linked to (see
+// app/api/auth/register/route.ts). An empty fullName is already an
+// anticipated case elsewhere in this codebase (the Dashboard's flagged
+// fields view falls back to "(No name on file)") — the employee fills
+// their own name in via the self-service profile page afterward.
+export function createBlankEmployeeForUser(userId: number, email: string): EmployeeRow {
+  const info = db
+    .prepare(`INSERT INTO "Employee" ("fullName", "email", "userId") VALUES ('', ?, ?)`)
+    .run(email, userId);
+  return db.prepare(`SELECT * FROM "Employee" WHERE "id" = ?`).get(Number(info.lastInsertRowid)) as EmployeeRow;
+}
+
+// Compensating action for register's rollback-on-email-failure path —
+// deletes the just-created blank Employee row before the User row is
+// removed, so it doesn't survive orphaned (userId SetNull'd) once the User
+// FK fires.
+export function deleteEmployee(id: number): void {
+  db.prepare(`DELETE FROM "Employee" WHERE "id" = ?`).run(id);
 }
 
 // Mirrors the Records/export toolbar's filter set — ?search= (free-text

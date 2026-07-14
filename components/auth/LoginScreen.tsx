@@ -23,7 +23,7 @@ interface LoginScreenProps {
 }
 
 export default function LoginScreen({ onSwitchToRegister }: LoginScreenProps) {
-  const { login, pendingVerification, pendingApproval } = useAuth();
+  const { login, pendingVerification } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
   const [email, setEmail] = useState('');
@@ -57,15 +57,6 @@ export default function LoginScreen({ onSwitchToRegister }: LoginScreenProps) {
     }
   }, [pendingVerification, router]);
 
-  // Same idea for the approval-waiting state — if the user got as far as
-  // "OTP verified, waiting on root" and then landed back here, resume on
-  // the pending screen instead of asking them to log in from scratch.
-  useEffect(() => {
-    if (pendingApproval) {
-      router.replace('/pending');
-    }
-  }, [pendingApproval, router]);
-
   const isValid = email.trim().length > 3 && password.length > 0;
 
   const handleSubmit = async (e: FormEvent) => {
@@ -77,14 +68,10 @@ export default function LoginScreen({ onSwitchToRegister }: LoginScreenProps) {
     setIsLoading(true);
 
     try {
-      const outcome = await login(email.trim(), password);
-      // login() sets state via setPendingApproval before returning; the
-      // pendingApproval useEffect above will do the routing on the next
-      // render. Explicit push here is redundant but makes the navigation
-      // immediate rather than one render behind.
-      if (outcome.status === 'pending_approval') {
-        router.replace('/pending');
-      }
+      // login() sets `user` on success; app/login/page.tsx's own
+      // isAuthenticated effect does the role-aware redirect once that
+      // state lands, so nothing else is needed here on a plain 'ok'.
+      await login(email.trim(), password);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Login failed. Please try again.';
       setError(message);

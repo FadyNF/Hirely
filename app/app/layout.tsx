@@ -8,13 +8,14 @@
 // appear on all three pages without repeating it in each one.
 
 import { useEffect, ReactNode } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import { AuthProvider, useAuth } from '@/context';
 import { Sidebar } from '@/components/layout';
 
 function AppShell({ children }: { children: ReactNode }) {
-  const { isAuthenticated, isAuthLoading } = useAuth();
+  const { isAuthenticated, isAuthLoading, user } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
 
   // Anyone not logged in gets bounced to /login. This is the actual
   // "front door lock" for the whole authenticated area — every page
@@ -24,6 +25,23 @@ function AppShell({ children }: { children: ReactNode }) {
       router.replace('/login');
     }
   }, [isAuthLoading, isAuthenticated, router]);
+
+  // Role split: an employee never sees the company-wide surfaces
+  // (Dashboard/Records/Chatbot/Matching/Admin) — only their own scoped
+  // view. Conversely admin/root have no linked Employee row, so
+  // /app/employee isn't theirs either. This is a client-side redirect for
+  // snappy UX everywhere; Dashboard/Records additionally hard-check this
+  // server-side (see their page.tsx) since they fetch company-wide data
+  // before this effect could ever fire.
+  useEffect(() => {
+    if (isAuthLoading || !isAuthenticated || !user) return;
+    const onEmployeeArea = pathname.startsWith('/app/employee');
+    if (user.role === 'employee' && !onEmployeeArea) {
+      router.replace('/app/employee');
+    } else if (user.role !== 'employee' && onEmployeeArea) {
+      router.replace('/app');
+    }
+  }, [isAuthLoading, isAuthenticated, user, pathname, router]);
 
   // While we're still checking (or about to redirect), render nothing
   // rather than briefly flashing real page content to a logged-out user.

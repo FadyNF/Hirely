@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect, useRef, FormEvent } from 'react';
-import { useRouter } from 'next/navigation';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
   faFire,
@@ -29,7 +28,6 @@ interface RegisterScreenProps {
 
 export default function RegisterScreen({ onSwitchToLogin }: RegisterScreenProps) {
   const { register, pendingVerification, verifyCode, resendCode, clearPendingVerification } = useAuth();
-  const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -119,15 +117,10 @@ export default function RegisterScreen({ onSwitchToLogin }: RegisterScreenProps)
     setVerifyError('');
     setIsVerifying(true);
     try {
-      const outcome = await verifyCode(pendingVerification.email, code);
-      // OTP was fine, but the account still needs root approval — go to
-      // the waiting screen instead of /app (which would just bounce us
-      // back to /login since there's no auth cookie yet).
-      if (outcome.status === 'pending_approval') {
-        router.replace('/pending');
-      } else {
-        router.replace('/app');
-      }
+      // verifyCode() sets `user` on success; app/register/page.tsx's own
+      // isAuthenticated effect does the role-aware redirect (/app vs
+      // /app/employee) once that state lands — nothing else needed here.
+      await verifyCode(pendingVerification.email, code);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Invalid or expired code. Please try again.';
       setVerifyError(message);

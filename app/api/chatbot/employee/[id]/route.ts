@@ -9,17 +9,29 @@
 
 import { NextResponse } from "next/server";
 import { getEmployeeById } from "@/lib/employees";
-import { requireUserId } from "@/lib/requireAuth";
+import { requireCallerContext } from "@/lib/requireAuth";
 
 export async function GET(request: Request, ctx: RouteContext<"/api/chatbot/employee/[id]">) {
-  if (!requireUserId(request)) {
+  const caller = await requireCallerContext(request);
+  if (!caller) {
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   }
 
   const { id } = await ctx.params;
-  const employeeId = Number(id);
+  let employeeId = Number(id);
   if (!Number.isInteger(employeeId)) {
     return NextResponse.json({ error: "Invalid employee id." }, { status: 400 });
+  }
+
+  // Defense in depth: an employee-role caller can only ever fetch their
+  // own linked record, regardless of what id the URL asks for — the
+  // self-service UI never sends anyone else's id, but a tampered request
+  // shouldn't be able to read another employee's data either.
+  if (caller.role === "employee") {
+    if (!caller.employeeId) {
+      return NextResponse.json({ error: "No linked employee record found for this account." }, { status: 403 });
+    }
+    employeeId = caller.employeeId;
   }
 
   const employee = await getEmployeeById(employeeId);

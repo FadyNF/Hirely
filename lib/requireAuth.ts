@@ -10,6 +10,8 @@
 
 import jwt from "jsonwebtoken";
 import { findUserById } from "./users";
+import { getEmployeeIdForUserId } from "./employees";
+import type { Role } from "./roles";
 
 const JWT_SECRET = process.env.JWT_SECRET!;
 
@@ -72,4 +74,33 @@ export async function requireRootUserIdFromServerCookies(): Promise<number | nul
   if (!userId) return null;
   const user = findUserById(userId);
   return user?.role === "root" ? userId : null;
+}
+
+export interface CallerContext {
+  userId: number;
+  role: Role;
+  // Null for admin/root (they have no linked HR record). Every "employee"
+  // role user gets one created at signup (see
+  // app/api/auth/register/route.ts), so this should only ever be null for
+  // that role in a data-integrity-broken edge case.
+  employeeId: number | null;
+}
+
+function resolveCallerContext(userId: number | null): CallerContext | null {
+  if (!userId) return null;
+  const user = findUserById(userId);
+  if (!user) return null;
+  return { userId, role: user.role, employeeId: getEmployeeIdForUserId(userId) };
+}
+
+// The one shared primitive every role-aware guard/route in the app is
+// built on: resolves not just "is this a valid login" but also which role
+// they are and (for employees) which Employee row they own — so callers
+// don't each re-derive role/employeeId their own way.
+export async function requireCallerContext(request: Request): Promise<CallerContext | null> {
+  return resolveCallerContext(requireUserId(request));
+}
+
+export async function requireCallerContextFromServerCookies(): Promise<CallerContext | null> {
+  return resolveCallerContext(await requireUserIdFromServerCookies());
 }

@@ -34,16 +34,22 @@ app/app/*                          →  everything behind login
   ├─ app/app/records/page.tsx      →  Records
   ├─ app/app/chatbot/page.tsx      →  Chatbot
   ├─ app/app/matching/page.tsx     →  Job Matching
-  └─ app/app/admin/page.tsx        →  Root admin console
+  ├─ app/app/admin/page.tsx        →  Root admin console
+  └─ app/app/employee/page.tsx     →  Employee self-service view (own profile + scoped chatbot)
 app/api/auth/*                     →  register / verify-code / resend-code / login / refresh / me / magic-login
 app/api/chatbot/*                  →  extract / commit / employee/[id] / import-excel
+app/api/employee/me                →  the self-service view's own-record fetch (no employeeId param —
+                                       always resolves to the caller's own linked record)
 app/api/templates/*                →  single-employee / batch — blank Excel template downloads
 app/api/export/*                   →  employee/[id] / batch — filled Excel exports
 app/api/import/batch/*             →  batch sheet parse+preview / commit
 app/api/job-matching/*             →  match / populate (sync embeddings)
-app/api/admin/*                    →  approvals/[userId], support-requests/[id] (root-only)
+app/api/admin/*                    →  approvals/[userId] (promote to admin), support-requests/[id] (root-only)
 lib/db.ts                          →  the SQLite connection + migration runner (see below) — the one
                                        thing every other lib/* data-access file imports
+lib/roles.ts                       →  the shared Role = "employee" | "admin" | "root" union type
+lib/requireAuth.ts                 →  cookie/JWT auth guards, incl. requireCallerContext (role + linked
+                                       employeeId, the primitive every role-aware guard/route is built on)
 lib/employees.ts, lib/users.ts,
 lib/supportRequests.ts             →  hand-written data-access layer (raw SQL via lib/db.ts)
 lib/jobMatching.ts                 →  BM25 + semantic (embedding) hybrid search, RRF-fused
@@ -52,15 +58,16 @@ lib/*                              →  everything else — shared business logi
 lib/excelImport/*                  →  Excel parsing, classification, and Excel-generation for import/export
 prisma/*                           →  schema.prisma + migrations (dev-only schema design tool) + seed script
 context/AuthContext.tsx            →  client-side session state + authFetch
+components/employee/*              →  EmployeeSelfServiceView (profile + tabs) and ScopedAssistant (chat)
 ```
 
 ### Data model (`prisma/schema.prisma`)
 
 `schema.prisma` is kept purely as a **local dev tool**: it's how you design a schema change and generate the next migration SQL file with `npx prisma migrate dev`. Nothing in the running app imports the generated Prisma client — see "Database access" below for how the app actually talks to SQLite.
 
-- **`User`** — an HR admin who logs into Hirely. Email + hashed password, an OTP verification code + expiry, a hashed refresh token, plus `role` (`"admin"` | `"root"`) and `approved` (root-admin gate, see "Root admin approval" below).
-- **`SupportRequest`** — a message from an admin (approved or still-pending) to the root admin: `type` (issue/request/other), subject, message, `status` (open/resolved). `submittedById` is nullable with `onDelete: SetNull` so a declined admin's request history survives their account being hard-deleted; `submittedByEmail` keeps a readable snapshot regardless.
-- **`Employee`** — the actual record being managed: name, phone, birth date, nationality, marital status, email, work location, gender, national ID, military status — plus (added for Excel import) `companyID`, `hiringDate`, `position`, `age`, `yearsExpPrev`, `yearsExpElsewedy`, `totalExperience`. All optional except `fullName`, since the whole point of this project is tracking *incomplete* profiles. `nationalId` and `companyID` are both nullable-unique.
+- **`User`** — a login account. Email + hashed password, an OTP verification code + expiry, a hashed refresh token, plus `role` (`"employee"` default | `"admin"` | `"root"`) and a legacy `approved` column (see "Onboarding & roles" below — every account is approved from the moment it exists now, there's no gate left to check).
+- **`SupportRequest`** — a message from any logged-in user to the root admin: `type` (issue/request/other), subject, message, `status` (open/resolved). `submittedById` is nullable with `onDelete: SetNull` so a removed account's request history survives; `submittedByEmail` keeps a readable snapshot regardless.
+- **`Employee`** — the actual HR record being managed: name, phone, birth date, nationality, marital status, email, work location, gender, national ID, military status — plus (added for Excel import) `companyID`, `hiringDate`, `position`, `age`, `yearsExpPrev`, `yearsExpElsewedy`, `totalExperience`. All optional except `fullName`, since the whole point of this project is tracking *incomplete* profiles. `nationalId` and `companyID` are both nullable-unique. `userId` is a nullable-unique 1:1 link back to the `User` who owns this record (see "Onboarding & roles" below) — `onDelete: SetNull`, so the HR record survives even if the login account is ever removed.
 - **`Experience`, `Education`, `Certificate`, `Skill`, `PerformanceReview`** — one-to-many child tables off `Employee`, cascade-deleted with the parent (enforced via `PRAGMA foreign_keys = ON` in `lib/db.ts` — see below). `Certificate.rawText` holds the original Excel source line when a certificate came from import, for admin traceability. `PerformanceReview.score` is stored as a 0–1 fraction (the UI shows/edits it as a 0–100 percentage).
 - **`ReviewFlag`** — a value the batch importer couldn't confidently accept and wrote anyway, surfaced on the Dashboard for an admin to fix or consciously accept, rather than silently dropped.
 - **`EmployeeEmbedding`** — one row per employee: a cached text corpus (built from their certificates/experience/skills) plus its Gemini embedding vector (stored as a JSON-serialized `float[]` string — SQLite has no native vector type), and an `isdirty` flag set whenever the employee is created/updated so the next sync picks up the change. Backs the Job Matching feature.
@@ -167,20 +174,27 @@ Static HTML (`public/Hirely_Landing_Page.html`), served at `/` via a Next.js rew
 
 `components/shared/Logo.tsx` wraps the Wedy.AI wordmark/mark (`public/images/wedy-mark.png`) at a caller-specified height, used everywhere the app previously showed a `faFire` gradient badge — the sidebar, login/register screens, and the chatbot welcome screen. `app/icon.png` is the app favicon; `public/images/wedy-mark.png` doubles as the landing page's favicon.
 
-Every route sets its own `<title>` via a Metadata export, composed through `app/layout.tsx`'s title template (`"%s · Hirely"`) rather than each page hardcoding the full string: `/login` → "Sign In · Hirely", `/register` → "Create Account · Hirely", `/app` → "Dashboard · Hirely", `/app/records` → "Records · Hirely", `/app/chatbot` → "Chatbot · Hirely", `/app/matching` → "Job Matching · Hirely", `/app/admin` → "Admin · Hirely", `/pending` → "Waiting for approval · Hirely".
+Every route sets its own `<title>` via a Metadata export, composed through `app/layout.tsx`'s title template (`"%s · Hirely"`) rather than each page hardcoding the full string: `/login` → "Sign In · Hirely", `/register` → "Create Account · Hirely", `/app` → "Dashboard · Hirely", `/app/records` → "Records · Hirely", `/app/chatbot` → "Chatbot · Hirely", `/app/matching` → "Job Matching · Hirely", `/app/admin` → "Admin · Hirely", `/app/employee` → "My Profile · Hirely".
 
-### Root admin approval & support requests
+### Onboarding & roles
 
-Not every signup can self-activate — a new admin's account is unusable (no tokens issued on login, even with the right password and a verified email) until the **root admin** approves it. This is deliberately separate from email verification: a person can fully OTP-verify their email and still be stuck on a "waiting for approval" screen.
+Three roles: **`employee`** (the default for every fresh signup), **`admin`** (a promoted employee), **`root`** (the single env-configured superuser). There used to be a fourth implicit state — "registered but pending root approval" — that gated *every* new signup; it's gone. Registering now always produces a fully usable account.
 
-- **The root identity is env-configured, not seeded.** `ADMIN_EMAIL` / `ADMIN_PASS` in `.env` are the only privileged account. `lib/rootAdmin.ts`'s `ensureRootAdminFromEnv()` upserts a `User` row matching those values — `role: "root"`, `approved: true` — every time that email attempts to log in, so rotating the password or changing the email takes effect on the next login attempt with no restart, no seed script, and no direct DB edit. The register route refuses signups for that email (`isRootEmail()`), since the root can't be created through the normal flow.
-- **Approval gate.** `POST /api/auth/login` and `POST /api/auth/verify-code` both check `user.approved` after credentials/OTP succeed; an unapproved user gets back `{ status: "pending_approval", email }` instead of auth cookies. `AuthContext` persists that state to `sessionStorage` (mirroring how `pendingVerification` already worked) so a page reload on the waiting screen doesn't bounce the user back to `/login`.
-- **`/pending`** — the waiting screen (`components/auth/PendingApprovalScreen.tsx`). Shows the account's email, a "Request assistance" button (opens the support form, pre-filled and locked to that email — works with no auth cookie, since the account isn't approved yet), and "Sign out".
-- **`/app/admin`** — the root's console (`components/admin/AdminConsoleView.tsx`), gated server-side by `requireRootUserIdFromServerCookies()` (`lib/requireAuth.ts`) — a non-root admin who navigates here directly gets redirected to `/app`, not shown an error page. Two sections:
-  - **Pending admin approvals** — every `approved: false` admin, oldest first. **Approve** flips `approved` to `true` and emails a one-click magic-login link (falls back cleanly to a normal password login if the email fails to send). **Decline hard-deletes the `User` row** (behind a native `confirm()` prompt) so the same email can freely re-register later — `POST`/`DELETE /api/admin/approvals/[userId]`.
-  - **Support requests** — every submission, newest-open-first, with type icon (Issue/Request/Other), submitter email, message, and a Mark resolved/Reopen toggle (`PATCH /api/admin/support-requests/[id]`). If the submitter's account was later declined, the row still shows their email (`submittedByEmail` is a snapshot, kept even after `submittedById` nulls out via `onDelete: SetNull`).
-- **Support request form** — `components/shared/SupportRequestModal.tsx`, submitted through `POST /api/support-requests` (no auth required, so a pending or logged-out user can still reach root). Reachable from: the sidebar's "Report an issue" item (any logged-in admin), the pending-approval screen (email pre-filled and locked), and the Login/Register screens' "Need help?" link (email editable, since neither identity is known yet at that point).
-- **Sidebar** — root-only "Admin" nav link and a small "Root admin" label under the account email; "Report an issue" is visible to everyone.
+- **Register → OTP → straight into the Employee self-service view.** `app/api/auth/register/route.ts` creates the `User` row **and** a blank, linked `Employee` row in the same transaction (`Employee.userId` → that `User.id`, `fullName: ""`, `email` pre-filled from the account email) — see "Employee self-service view" below. No approval step, no waiting screen: `role: "employee"`, `approved: true` from the moment the row exists (see the migration that changed both column defaults). If the verification email fails to send, both rows are rolled back together, not just the `User` row.
+- **The root identity is env-configured, not seeded.** `ADMIN_EMAIL` / `ADMIN_PASS` in `.env` are the only privileged account. `lib/rootAdmin.ts`'s `ensureRootAdminFromEnv()` upserts a `User` row matching those values — `role: "root"`, `approved: true` — every time that email attempts to log in, so rotating the password or changing the email takes effect on the next login attempt with no restart, no seed script, and no direct DB edit. The register route refuses signups for that email (`isRootEmail()`).
+- **Becoming an admin is something root does *to* an employee, never something you request at signup.** `/app/admin`'s "Promote to admin" section (`components/admin/AdminConsoleView.tsx`) lists every `role: "employee"` user; **Promote** (`POST /api/admin/approvals/[userId]`) flips their role to `"admin"` — a one-way, non-destructive action, no confirmation dialog needed.
+- **Role-based routing.** `lib/requireAuth.ts`'s `requireCallerContext`/`requireCallerContextFromServerCookies` resolve not just "is this a valid login" but the caller's `role` and (for employees) their linked `employeeId` in one call — the shared primitive every guard below is built on. `app/app/layout.tsx`'s client-side effect and each Server Component page (`/app`, `/app/records`) redirect an `employee`-role caller to `/app/employee`, and redirect anyone else away from `/app/employee` back to `/app`. Post-login/register redirects (`app/login/page.tsx`, `app/register/page.tsx`) send an employee straight to `/app/employee` instead of the admin `/app` shell. `Sidebar.tsx` renders a short employee-only nav (My Profile) instead of the full admin one.
+- **Support request form** — `components/shared/SupportRequestModal.tsx`, submitted through `POST /api/support-requests` (no auth required). Reachable from the sidebar's "Report an issue" item and the Login/Register screens' "Need help?" link.
+- **Admin console's other section**: **Support requests** — every submission, newest-open-first, with type icon (Issue/Request/Other), submitter email, message, and a Mark resolved/Reopen toggle (`PATCH /api/admin/support-requests/[id]`).
+
+### Employee self-service view
+
+An `employee`-role user's own landing page (`app/app/employee/page.tsx` + `components/employee/EmployeeSelfServiceView.tsx`) — their own HR record, and nothing else. There's no list, search, or pagination here (unlike Records) — there's only ever one record, fetched via `GET /api/employee/me` rather than any company-wide query.
+
+- **My Profile tab** — a read-only summary + an **Edit profile** button that opens `EmployeeForm` (`components/shared/EmployeeForm.tsx`) exactly as-is, reused unmodified from the admin Records flow. Submitting posts to the same `POST /api/chatbot/commit` route Records' edit form uses.
+- **The authorization fix that makes this safe**: `commit/route.ts` (and `GET /api/chatbot/employee/[id]`) resolve the caller's role via `requireCallerContext` and, for an `employee`-role caller, **force** `action` to `"update"` and **overwrite** whatever `employeeId` the client sent with the caller's own linked id — never trusting the request body for that role. Without this, any authenticated employee could pass an arbitrary `employeeId` (devtools, curl) and edit someone else's record, since the underlying write functions (`updateEmployeeWithRelations`) have no ownership concept of their own. `admin`/`root` behavior through this same route is completely unchanged.
+- **Assistant tab** — a scoped chatbot (`components/employee/ScopedAssistant.tsx`), visually similar to the admin `ChatbotView.tsx` but a fraction of the size: `app/api/chatbot/extract/route.ts` skips `lib/chatbotResolve.ts` entirely for an employee caller (that module always searches the *whole* `Employee` table by name/ID) and hardcodes resolution to the caller's own record — so there's no disambiguation, no create flow, no Excel import; the only actions it can ever return are `update`, `info`, or `unsupported`.
+- **Removing one relation entry** (a stale certificate, an old skill) needed **no new backend code** — it already falls out of the edit form's existing replace-all-relations mechanism (`replaceRelations: true`), now reachable by an employee scoped to their own id. Whole-profile self-delete isn't built (by design — out of scope for this feature).
 
 ### Hover / transition polish
 
@@ -223,13 +237,30 @@ Other scripts: `npm run build`, `npm run start`, `npm run lint`.
 
 ## Known limitations / not yet built
 
-- **Delete** isn't implemented — planned with a soft-delete (`deletedAt`) column and explicit double-confirmation, but deferred until Create/Update/Read are fully solid.
+- **Delete** for admins isn't implemented — planned with a soft-delete (`deletedAt`) column and explicit double-confirmation, but deferred until Create/Update/Read are fully solid. (An employee *can* remove a single relation entry — a stale certificate, an old skill — from their own record via the self-service view; see "Employee self-service view" above. There's still no whole-profile delete for anyone.)
 - **No password-reset flow** — only register → verify → login → refresh exist.
 - **No rate limiting or account lockout** on login attempts or OTP guesses.
 - **No audit trail** — nothing records who changed which employee field or when.
 - **Chat history isn't persisted** — it's client-side React state; a page refresh loses the conversation (including the `lastEmployee` memory).
 - **Relation sub-fields aren't validated** — the experience/education/certificate/skill arrays' own fields (e.g. a job's start/end date) can still reach the database malformed or missing, even though the scalar employee fields are now validated at both the extraction step and the write boundary.
-- **Job Matching has no "job openings" concept yet** — a job description is pasted ad hoc each search rather than saved/reused; structured (schema-based) matching was scoped but deferred in favor of the current hybrid BM25+embedding approach.
+- **Job Matching has no "job openings" concept yet** — a job description is pasted ad hoc each search rather than saved/reused.
 - **Single-employee Excel export/import doesn't carry Skills** — a known, deferred gap (batch import/export already handles skills correctly).
 - **Batch import has no inline row-editing** — a row that fails validation must be fixed in the source spreadsheet and re-uploaded; the review table can't edit cells directly.
 - **Batch import has no volume/pagination handling** — an intentional deferral for very large sheets, revisit if it becomes a real problem.
+- **No way to trigger an embedding sync from the UI anymore** — see "Planned work" below.
+
+---
+
+## Planned work (next up)
+
+Captured here (rather than only in chat) so a fresh session can pick this up without re-deriving context.
+
+### Done since the last update
+
+The Employee self-service view + onboarding overhaul (employee-only signups, `User`↔`Employee` link, promote-to-admin) described throughout this README is now built, migrated, and verified live — including the authorization fix in `commit`/`employee/[id]` routes and a real spoofed-`employeeId` test confirming it's actually enforced, not just UI-hidden. See "Onboarding & roles" and "Employee self-service view" above for the current-state description; this section only tracks what's still open.
+
+### Still open
+
+- **Sync Embeddings UI button** — removed from `components/matching/MatchingView.tsx` in an earlier merge (commit `"removed-sync-button"`), replaced with a standalone CLI script (`scripts/run-embeddings.ts`). The API route (`POST /api/job-matching/populate`) still exists and works — nothing in the UI calls it anymore, so a new/updated employee's embedding silently stays stale until someone runs the script by hand. No cron/scheduled job has been set up yet. Explicitly deferred (by user decision) until real automation exists — don't just restore the button as a stopgap without also deciding on the automation.
+- **Structured Matching's skills/education gap** — `lib/jobMatching.ts`'s `extractJobRequirements()` hard-filters on `nationality`/`gender`/`totalExperience`/`yearsExpElsewedy` before the BM25+embedding rerank, but there's no structured hard-filtering yet on skills, certifications, or education level (degree/field of study) — those were part of the original structured-matching brainstorm but are currently only handled by the free-text BM25+embedding layer. Worth deciding whether to extend the schema, or treat the current four-field version as good enough.
+- **Any "demote admin back to employee" or "root removes a user account" action** — not requested, not built. The old Decline (hard-delete) endpoint was removed along with the pending-approval flow it belonged to; there's currently no way for root to remove an account at all.

@@ -1,16 +1,16 @@
 // app/app/admin/page.tsx
 //
-// Root-only console: pending admin signup requests + open support/issue
+// Root-only console: promote employees to admin + open support/issue
 // submissions. Server Component that hard-checks the role via
-// requireRootUserIdFromServerCookies — a plain admin who guesses this
-// URL gets redirected the same way a logged-out visitor would.
+// requireRootUserIdFromServerCookies — a plain admin/employee who guesses
+// this URL gets redirected the same way a logged-out visitor would.
 
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { findPendingAdmins } from "@/lib/users";
+import { findEmployeeUsers } from "@/lib/users";
 import { listSupportRequestsForAdmin } from "@/lib/supportRequests";
 import { requireRootUserIdFromServerCookies } from "@/lib/requireAuth";
-import AdminConsoleView, { type PendingAdmin, type SupportRequestSummary } from "@/components/admin/AdminConsoleView";
+import AdminConsoleView, { type EmployeeUser, type SupportRequestSummary } from "@/components/admin/AdminConsoleView";
 
 export const metadata: Metadata = { title: "Admin" };
 
@@ -21,14 +21,14 @@ export default async function AdminPage() {
   // AuthProvider hydrated, which is a worse UX than a plain redirect.
   if (!rootId) redirect("/app");
 
-  const pendingUsers = findPendingAdmins();
+  const employeeUsers = findEmployeeUsers();
   const supportRequests = listSupportRequestsForAdmin();
 
   // Serialize Date -> ISO string for the Client Component boundary.
-  const pending: PendingAdmin[] = pendingUsers.map((u) => ({
+  const pending: EmployeeUser[] = employeeUsers.map((u) => ({
     id: u.id,
     email: u.email,
-    emailVerified: u.emailVerified,
+    fullName: u.fullName,
     createdAtIso: u.createdAt.toISOString(),
   }));
   const requests: SupportRequestSummary[] = supportRequests.map((r) => ({

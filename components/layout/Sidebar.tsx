@@ -22,6 +22,7 @@ import {
   faBriefcase,
   faUserShield,
   faLifeRing,
+  faIdCard,
 } from '@fortawesome/free-solid-svg-icons';
 import { useAuth } from '@/context';
 import Logo from '@/components/shared/Logo';
@@ -29,13 +30,21 @@ import SupportRequestModal from '@/components/shared/SupportRequestModal';
 
 const RED = '#DC2626';
 
-// The three main destinations. Defined as data, not repeated JSX, so
-// adding a fourth page later is a one-line change here, not a copy-paste.
+// The four main admin/root destinations. Defined as data, not repeated
+// JSX, so adding another page later is a one-line change here, not a
+// copy-paste.
 const NAV_ITEMS = [
   { href: '/app', label: 'Dashboard', icon: faGaugeHigh },
   { href: '/app/records', label: 'Records', icon: faTableList },
   { href: '/app/chatbot', label: 'Chatbot', icon: faComments },
   { href: '/app/matching', label: 'Job Matching', icon: faBriefcase },
+];
+
+// An "employee"-role user gets none of the company-wide surfaces above —
+// just their own profile (which itself has a My Profile / Assistant tab
+// switcher, see app/app/employee/page.tsx).
+const EMPLOYEE_NAV_ITEMS = [
+  { href: '/app/employee', label: 'My Profile', icon: faIdCard },
 ];
 
 function NavLink({
@@ -88,6 +97,8 @@ export default function Sidebar() {
   const { user, logout } = useAuth();
 
   const isRoot = user?.role === 'root';
+  const isEmployee = user?.role === 'employee';
+  const navItems = isEmployee ? EMPLOYEE_NAV_ITEMS : NAV_ITEMS;
 
   // Exact match for "/app" (Dashboard), but a "starts with" check for the
   // others — so "/app/records/123" (a future detail view) still highlights
@@ -119,7 +130,7 @@ export default function Sidebar() {
           section (below) is always pinned to the bottom, not just
           sitting wherever the last nav item happens to end. */}
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-        {NAV_ITEMS.map((item) => (
+        {navItems.map((item) => (
           <NavLink
             key={item.href}
             href={item.href}
