@@ -1,7 +1,7 @@
 // app/api/auth/verify-code/route.ts
 
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { findUserByEmail, updateUser } from "@/lib/users";
 import { signTokenPair, setAuthCookies } from "@/lib/authTokens";
 
 export async function POST(request: NextRequest) {
@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const user = await prisma.user.findUnique({ where: { email } });
+    const user = findUserByEmail(email);
 
     // Deliberately vague error message here — don't reveal WHETHER the
     // email exists at all. Saying "no account with that email" vs "wrong
@@ -52,13 +52,10 @@ export async function POST(request: NextRequest) {
     // so the client can route to the "waiting for approval" screen the
     // same way regardless of which endpoint produced the response.
     if (!user.approved) {
-      await prisma.user.update({
-        where: { id: user.id },
-        data: {
-          emailVerified: true,
-          verificationCode: null,
-          codeExpiresAt: null,
-        },
+      updateUser(user.id, {
+        emailVerified: true,
+        verificationCode: null,
+        codeExpiresAt: null,
       });
       return NextResponse.json({
         status: "pending_approval",
@@ -80,14 +77,11 @@ export async function POST(request: NextRequest) {
     const { accessToken, refreshToken, refreshTokenHash } = signTokenPair(user.id, user.email);
 
     // ---- Update the user: verified, code cleared, refresh token stored ----
-    await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        emailVerified: true,
-        verificationCode: null,
-        codeExpiresAt: null,
-        refreshTokenHash,
-      },
+    updateUser(user.id, {
+      emailVerified: true,
+      verificationCode: null,
+      codeExpiresAt: null,
+      refreshTokenHash,
     });
 
     const response = NextResponse.json({

@@ -13,7 +13,7 @@
 // what the caller submits.
 
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { createSupportRequest } from "@/lib/supportRequests";
 import { requireUserId } from "@/lib/requireAuth";
 
 const ALLOWED_TYPES = new Set(["issue", "request", "other"]);
@@ -54,14 +54,12 @@ export async function POST(request: NextRequest) {
   // if the token expired mid-submit). Email is always stored regardless.
   const userId = requireUserId(request);
 
-  await prisma.supportRequest.create({
-    data: {
-      type,
-      subject,
-      message,
-      submittedByEmail: submittedEmail,
-      submittedById: userId,
-    },
+  createSupportRequest({
+    type,
+    subject,
+    message,
+    submittedByEmail: submittedEmail,
+    submittedById: userId,
   });
 
   return NextResponse.json({ ok: true });

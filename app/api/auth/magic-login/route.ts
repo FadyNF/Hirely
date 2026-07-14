@@ -9,7 +9,7 @@
 
 import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { findUserByMagicLoginTokenHash, updateUser } from "@/lib/users";
 import { signTokenPair, setAuthCookies } from "@/lib/authTokens";
 
 export async function GET(request: NextRequest) {
@@ -22,9 +22,7 @@ export async function GET(request: NextRequest) {
   }
 
   const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
-  const user = await prisma.user.findFirst({
-    where: { magicLoginTokenHash: tokenHash },
-  });
+  const user = findUserByMagicLoginTokenHash(tokenHash);
 
   if (!user || !user.magicLoginTokenExpiresAt || user.magicLoginTokenExpiresAt < new Date()) {
     loginUrl.searchParams.set("magicLoginError", "1");
@@ -35,13 +33,10 @@ export async function GET(request: NextRequest) {
 
   // Consume the token here (not just on success elsewhere) so this link
   // only ever works once, no matter how it's reached.
-  await prisma.user.update({
-    where: { id: user.id },
-    data: {
-      refreshTokenHash,
-      magicLoginTokenHash: null,
-      magicLoginTokenExpiresAt: null,
-    },
+  updateUser(user.id, {
+    refreshTokenHash,
+    magicLoginTokenHash: null,
+    magicLoginTokenExpiresAt: null,
   });
 
   const response = NextResponse.redirect(new URL("/app", request.url));

@@ -1,6 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
-import { Prisma } from "./generated/prisma/client";
-import { prisma } from "./prisma";
+import { db, inClause } from "./db";
 
 const SEMANTIC_WEIGHT = 0.7;
 const BM25_WEIGHT = 0.3;
@@ -148,11 +147,6 @@ async function extractJobRequirements(jobDescription: string): Promise<Structure
       requirementText: parsed.requirementText?.trim() || jobDescription.trim(),
     };
 
-    // for debugging
-    // console.log("\n\x1b[36m=== Extracted Requirements from Gemini ===\x1b[0m");
-    // console.dir(structuredData, { depth: null, colors: true });
-    // console.log("\x1b[36m==========================================\x1b[0m\n");
-
     return structuredData;
   } catch (error) {
     console.error("Failed to parse job requirements with Gemini", error);
@@ -208,40 +202,43 @@ export async function matchTopProfiles(
   const requirements = await extractJobRequirements(jobDescription);
   const searchText = buildRequirementText(requirements);
 
-  const where: Prisma.EmployeeWhereInput = {};
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
   if (requirements.nationality) {
-    where.nationality = { equals: requirements.nationality };
+    conditions.push(`"nationality" = ?`);
+    params.push(requirements.nationality);
   }
   if (requirements.gender) {
-    where.gender = { equals: requirements.gender };
+    conditions.push(`"gender" = ?`);
+    params.push(requirements.gender);
   }
   if (requirements.totalExperience != null && !isNaN(requirements.totalExperience)) {
-    where.totalExperience = { gte: requirements.totalExperience };
+    conditions.push(`"totalExperience" >= ?`);
+    params.push(requirements.totalExperience);
   }
   if (requirements.yearsExpElsewedy != null && !isNaN(requirements.yearsExpElsewedy)) {
-    where.yearsExpElsewedy = { gte: requirements.yearsExpElsewedy };
+    conditions.push(`"yearsExpElsewedy" >= ?`);
+    params.push(requirements.yearsExpElsewedy);
   }
 
-  const employees = await prisma.employee.findMany({
-    where,
-    select: { id: true },
-  });
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const employees = db.prepare(`SELECT "id" FROM "Employee" ${whereClause}`).all(...params) as { id: number }[];
 
   const employeeIds = employees.map((employee) => employee.id);
   if (employeeIds.length === 0) {
     return [];
   }
 
-  const dbProfiles = await prisma.employeeEmbedding.findMany({
-    where: { 
-      employeeId: { in: employeeIds } 
-    },
-    select: { 
-      employeeId: true,
-      allexperience: true, 
-      embedding: true 
-    }
-  });
+  const { sql: idsSql, params: idsParams } = inClause(employeeIds);
+  const dbProfiles = db.prepare(`
+    SELECT "employeeId", "allexperience", "embedding"
+    FROM "EmployeeEmbedding"
+    WHERE "employeeId" IN ${idsSql}
+  `).all(...idsParams) as {
+    employeeId: number;
+    allexperience: string;
+    embedding: string;
+  }[];
 
   if (!dbProfiles || dbProfiles.length === 0) {
     return [];

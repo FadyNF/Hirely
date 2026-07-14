@@ -239,7 +239,7 @@ function MultiEntryDetail({
             label: config.fieldLabels[key],
         }),
     );
-    const entries = employee[tabKey] as Record<string, unknown>[];
+    const entries = employee[tabKey] as unknown as Record<string, unknown>[];
 
     if (entries.length === 0) {
         return (

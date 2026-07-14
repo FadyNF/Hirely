@@ -8,7 +8,7 @@
 // This route gets the real thing without spending a model call on it.
 
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { getEmployeeById } from "@/lib/employees";
 import { requireUserId } from "@/lib/requireAuth";
 
 export async function GET(request: Request, ctx: RouteContext<"/api/chatbot/employee/[id]">) {
@@ -22,10 +22,7 @@ export async function GET(request: Request, ctx: RouteContext<"/api/chatbot/empl
     return NextResponse.json({ error: "Invalid employee id." }, { status: 400 });
   }
 
-  const employee = await prisma.employee.findUnique({
-    where: { id: employeeId },
-    include: { experience: true, education: true, certificates: true, skills: true, performanceReviews: true },
-  });
+  const employee = await getEmployeeById(employeeId);
   if (!employee) {
     return NextResponse.json({ error: "Employee not found." }, { status: 404 });
   }

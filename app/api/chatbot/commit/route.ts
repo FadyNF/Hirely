@@ -5,8 +5,14 @@
 // Nothing upstream of this route touches Prisma's create/update methods.
 
 import { NextRequest, NextResponse } from "next/server";
-import { prisma, markEmployeeEmbeddingDirty } from "@/lib/prisma";
-import { Prisma } from "@/lib/generated/prisma/client";
+import { db } from "@/lib/db";
+import {
+  createEmployeeWithRelations,
+  updateEmployeeWithRelations,
+  EmployeeNotFoundError,
+  type RelationValues,
+} from "@/lib/employees";
+import { markEmployeeEmbeddingDirty } from "@/lib/employeeCertificates";
 import { requireUserId } from "@/lib/requireAuth";
 import { validateExtractedFields } from "@/lib/chatbotValidate";
 
@@ -67,14 +73,11 @@ export async function POST(request: NextRequest) {
     //   every one of them. `replaceRelations: true` switches to a full
     //   delete-then-recreate so the DB ends up matching exactly what's on
     //   the form, including a relation the admin cleared out entirely.
-    const relationData: Record<string, unknown> = {};
+    const relationValues: RelationValues = {};
     for (const key of ["experience", "education", "certificates", "skills", "performanceReviews"] as const) {
       const value = cleaned[key];
-      const hasEntries = Array.isArray(value) && value.length > 0;
-      if (action === "update" && replaceRelations) {
-        relationData[key] = hasEntries ? { deleteMany: {}, create: value } : { deleteMany: {} };
-      } else if (hasEntries) {
-        relationData[key] = { create: value };
+      if (Array.isArray(value) && value.length > 0) {
+        relationValues[key] = value as Record<string, unknown>[];
       }
     }
 
@@ -85,10 +88,8 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
-      const employee = await prisma.employee.create({
-        data: { ...scalarData, ...relationData } as never,
-      });
-      await markEmployeeEmbeddingDirty(employee.id).catch(() => {});
+      const employee = createEmployeeWithRelations(scalarData, relationValues);
+      markEmployeeEmbeddingDirty(employee.id);
       return NextResponse.json({ status: "created", employee });
     }
 
@@ -96,37 +97,33 @@ export async function POST(request: NextRequest) {
     if (!employeeId) {
       return NextResponse.json({ error: "employeeId is required for updates." }, { status: 400 });
     }
-    const employee = await prisma.employee.update({
-      where: { id: employeeId },
-      data: { ...scalarData, ...relationData } as never,
-    });
-    await markEmployeeEmbeddingDirty(employee.id).catch(() => {});
+    const employee = updateEmployeeWithRelations(employeeId, scalarData, relationValues, Boolean(replaceRelations));
+    markEmployeeEmbeddingDirty(employee.id);
 
     // Best-effort: the edit itself already succeeded, so a failure here
     // (bad/stale flag id, already resolved elsewhere) shouldn't turn a
     // successful save into an error response.
     if (resolveFlagId) {
-      await prisma.reviewFlag
-        .update({ where: { id: resolveFlagId }, data: { resolved: true } })
-        .catch((err) => console.error("Failed to auto-resolve review flag after edit:", err));
+      try {
+        db.prepare(`UPDATE "ReviewFlag" SET "resolved" = 1 WHERE "id" = ?`).run(resolveFlagId);
+      } catch (err) {
+        console.error("Failed to auto-resolve review flag after edit:", err);
+      }
     }
 
     return NextResponse.json({ status: "updated", employee });
   } catch (error) {
-    // P2002 = unique-constraint violation. nationalId and companyID are
-    // both unique on Employee now, so check WHICH column actually
-    // collided (Prisma reports it in error.meta.target) rather than
-    // assuming it's always nationalId — return an actionable 409 instead
-    // of a generic 500 so the admin knows exactly which field to fix.
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      // The better-sqlite3 adapter leaves meta.target undefined and names the
-      // column deeper in meta (…constraint.fields / the driver's "UNIQUE
-      // constraint failed: Employee.companyID" message), so match against the
-      // whole meta blob rather than target alone.
-      const blob = JSON.stringify(error.meta ?? "").toLowerCase();
-      const [field, label] = blob.includes("companyid")
+    // Unique-constraint violation. nationalId and companyID are both
+    // unique on Employee, so check WHICH column actually collided —
+    // better-sqlite3's own error message already names it directly (e.g.
+    // "UNIQUE constraint failed: Employee.companyID") — rather than
+    // assuming it's always nationalId, so we can return an actionable 409
+    // instead of a generic 500.
+    if (error instanceof Error && (error as { code?: string }).code === "SQLITE_CONSTRAINT_UNIQUE") {
+      const message = error.message.toLowerCase();
+      const [field, label] = message.includes("companyid")
         ? ["companyID", "company ID"]
-        : blob.includes("nationalid")
+        : message.includes("nationalid")
           ? ["nationalId", "national ID"]
           : [null, "unique field"];
       return NextResponse.json(
@@ -134,9 +131,9 @@ export async function POST(request: NextRequest) {
         { status: 409 }
       );
     }
-    // P2025 = record to update not found (e.g. the employee was deleted
-    // between disambiguation and confirm).
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
+    // Record to update not found (e.g. the employee was deleted between
+    // disambiguation and confirm).
+    if (error instanceof EmployeeNotFoundError) {
       return NextResponse.json(
         { error: "That employee no longer exists." },
         { status: 404 }

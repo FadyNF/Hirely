@@ -9,6 +9,7 @@
 // that only runs after the page's data has already been fetched and sent.
 
 import jwt from "jsonwebtoken";
+import { findUserById } from "./users";
 
 const JWT_SECRET = process.env.JWT_SECRET!;
 
@@ -60,8 +61,7 @@ export async function requireUserIdFromServerCookies(): Promise<number | null> {
 export async function requireRootUserId(request: Request): Promise<number | null> {
   const userId = requireUserId(request);
   if (!userId) return null;
-  const { prisma } = await import("./prisma");
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+  const user = findUserById(userId);
   return user?.role === "root" ? userId : null;
 }
 
@@ -70,7 +70,6 @@ export async function requireRootUserId(request: Request): Promise<number | null
 export async function requireRootUserIdFromServerCookies(): Promise<number | null> {
   const userId = await requireUserIdFromServerCookies();
   if (!userId) return null;
-  const { prisma } = await import("./prisma");
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+  const user = findUserById(userId);
   return user?.role === "root" ? userId : null;
 }

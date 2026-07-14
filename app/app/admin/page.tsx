@@ -7,7 +7,8 @@
 
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { prisma } from "@/lib/prisma";
+import { findPendingAdmins } from "@/lib/users";
+import { listSupportRequestsForAdmin } from "@/lib/supportRequests";
 import { requireRootUserIdFromServerCookies } from "@/lib/requireAuth";
 import AdminConsoleView, { type PendingAdmin, type SupportRequestSummary } from "@/components/admin/AdminConsoleView";
 
@@ -20,27 +21,8 @@ export default async function AdminPage() {
   // AuthProvider hydrated, which is a worse UX than a plain redirect.
   if (!rootId) redirect("/app");
 
-  const [pendingUsers, supportRequests] = await Promise.all([
-    prisma.user.findMany({
-      where: { approved: false, role: "admin" },
-      orderBy: { createdAt: "asc" },
-      select: { id: true, email: true, createdAt: true, emailVerified: true },
-    }),
-    prisma.supportRequest.findMany({
-      orderBy: [{ status: "asc" }, { createdAt: "desc" }],
-      select: {
-        id: true,
-        type: true,
-        subject: true,
-        message: true,
-        status: true,
-        rootReply: true,
-        submittedByEmail: true,
-        submittedById: true,
-        createdAt: true,
-      },
-    }),
-  ]);
+  const pendingUsers = findPendingAdmins();
+  const supportRequests = listSupportRequestsForAdmin();
 
   // Serialize Date -> ISO string for the Client Component boundary.
   const pending: PendingAdmin[] = pendingUsers.map((u) => ({

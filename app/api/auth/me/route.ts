@@ -2,7 +2,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireUserId } from "@/lib/requireAuth";
-import { prisma } from "@/lib/prisma";
+import { findUserById } from "@/lib/users";
 
 export async function GET(request: NextRequest) {
   try {
@@ -18,7 +18,7 @@ export async function GET(request: NextRequest) {
     // We don't just trust what's IN the token for things like email —
     // we look it up fresh, in case anything about the account changed
     // since the token was issued.
-    const user = await prisma.user.findUnique({ where: { id: userId } });
+    const user = findUserById(userId);
     if (!user) {
       return NextResponse.json({ error: "User not found." }, { status: 404 });
     }

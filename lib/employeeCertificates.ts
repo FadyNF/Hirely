@@ -1,6 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
-import { prisma } from "./prisma";
-import { Prisma } from "./generated/prisma/client";
+import { db, inClause } from "./db";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
@@ -9,44 +8,43 @@ export async function getEmployeeCombinedCorpusMap(targetEmployeeIds?: number[])
     return {};
   }
 
-  const certificates = await prisma.certificate.findMany({
-    where: targetEmployeeIds ? { employeeId: { in: targetEmployeeIds } } : undefined,
-    select: {
-      employeeId: true,
-      certName: true,
-      issuer: true,
-      issueDate: true,
-      expiryDate: true,
-    },
-    orderBy: [{ employeeId: "asc" }, { certName: "asc" }],
-  });
+  const idFilter = targetEmployeeIds ? inClause(targetEmployeeIds) : null;
+  const whereClause = idFilter ? `WHERE "employeeId" IN ${idFilter.sql}` : "";
+  const params = idFilter ? idFilter.params : [];
 
-  let experiences: { employeeId: bigint | number; jobTitle: string; company: string; description: string | null }[];
-  if (targetEmployeeIds) {
-    experiences = await prisma.$queryRaw`
-      SELECT employeeId, jobTitle, company, description
-      FROM Experience
-      WHERE employeeId IN (${Prisma.join(targetEmployeeIds)})
-      ORDER BY employeeId ASC
-    `;
-  } else {
-    experiences = await prisma.$queryRaw`
-      SELECT employeeId, jobTitle, company, description
-      FROM Experience
-      ORDER BY employeeId ASC
-    `;
-  }
+  const certificates = db
+    .prepare(
+      `SELECT "employeeId", "certName", "issuer", "issueDate", "expiryDate" FROM "Certificate" ${whereClause} ORDER BY "employeeId" ASC, "certName" ASC`
+    )
+    .all(...params) as {
+    employeeId: number;
+    certName: string;
+    issuer: string;
+    issueDate: string;
+    expiryDate: string | null;
+  }[];
 
-  const skills = await prisma.skill.findMany({
-    where: targetEmployeeIds ? { employeeId: { in: targetEmployeeIds } } : undefined,
-    select: {
-      employeeId: true,
-      category: true,
-      name: true,
-      proficiency: true,
-    },
-    orderBy: [{ employeeId: "asc" }, { name: "asc" }],
-  });
+  const experiences = db
+    .prepare(
+      `SELECT "employeeId", "jobTitle", "company", "description" FROM "Experience" ${whereClause} ORDER BY "employeeId" ASC`
+    )
+    .all(...params) as {
+    employeeId: number;
+    jobTitle: string;
+    company: string;
+    description: string | null;
+  }[];
+
+  const skills = db
+    .prepare(
+      `SELECT "employeeId", "category", "name", "proficiency" FROM "Skill" ${whereClause} ORDER BY "employeeId" ASC, "name" ASC`
+    )
+    .all(...params) as {
+    employeeId: number;
+    category: string;
+    name: string;
+    proficiency: number;
+  }[];
 
   const employeeDataMap = new Map<number, { certs: string[]; experiences: string[]; skills: string[] }>();
 
@@ -114,37 +112,40 @@ async function generateEmbeddingVector(text: string): Promise<number[]> {
   return response.embeddings?.[0]?.values ?? [];
 }
 
+// Replaces the old markEmployeeEmbeddingDirty export from lib/prisma.ts —
+// same INSERT ... ON CONFLICT DO UPDATE, called after every employee
+// create/update so the next sync picks up the change.
+export function markEmployeeEmbeddingDirty(employeeId: number): void {
+  db.prepare(
+    `INSERT INTO "EmployeeEmbedding" ("employeeId", "allexperience", "embedding", "isdirty")
+     VALUES (?, '', '[]', 1)
+     ON CONFLICT ("employeeId") DO UPDATE SET "isdirty" = 1`
+  ).run(employeeId);
+}
+
 export async function populateEmployeeEmbeddingsFromCertificates(): Promise<number> {
-  const employees = await prisma.employee.findMany({
-    select: { id: true },
-    orderBy: { id: "asc" },
-  });
+  const employees = db.prepare(`SELECT "id" FROM "Employee" ORDER BY "id" ASC`).all() as { id: number }[];
 
-  const existingRows = await prisma.$queryRaw<{ employeeId: bigint | number }[]>`
-    SELECT "employeeId" FROM "EmployeeEmbedding"
-  `;
+  const existingRows = db.prepare(`SELECT "employeeId" FROM "EmployeeEmbedding"`).all() as { employeeId: number }[];
 
-  const existingIds = new Set(existingRows.map((row) => Number(row.employeeId)));
-  const missingEmployeeIds = employees
-    .map((employee) => employee.id)
-    .filter((employeeId) => !existingIds.has(employeeId));
+  const existingIds = new Set(existingRows.map((row) => row.employeeId));
+  const missingEmployeeIds = employees.map((employee) => employee.id).filter((employeeId) => !existingIds.has(employeeId));
 
   if (missingEmployeeIds.length > 0) {
+    const insertMissing = db.prepare(
+      `INSERT INTO "EmployeeEmbedding" ("employeeId", "allexperience", "embedding", "isdirty") VALUES (?, '', '[]', 1)`
+    );
     for (const employeeId of missingEmployeeIds) {
-      await prisma.$executeRaw`
-        INSERT INTO "EmployeeEmbedding" ("employeeId", "allexperience", "embedding", "isdirty")
-        VALUES (${employeeId}, '', '[]', 1)
-      `;
+      insertMissing.run(employeeId);
     }
   }
 
-  const dirtyRecords = await prisma.$queryRaw<{ employeeId: bigint | number }[]>`
-    SELECT "employeeId" FROM "EmployeeEmbedding" WHERE "isdirty" = 1
-  `;
+  const dirtyRecords = db.prepare(`SELECT "employeeId" FROM "EmployeeEmbedding" WHERE "isdirty" = 1`).all() as {
+    employeeId: number;
+  }[];
 
-  const dirtyIds = dirtyRecords && dirtyRecords.length > 0
-    ? dirtyRecords.map((r) => Number(r.employeeId))
-    : employees.map((employee) => employee.id);
+  const dirtyIds =
+    dirtyRecords && dirtyRecords.length > 0 ? dirtyRecords.map((r) => r.employeeId) : employees.map((employee) => employee.id);
 
   const textMap = await getEmployeeCombinedCorpusMap(dirtyIds);
   let processedCount = 0;
@@ -153,24 +154,19 @@ export async function populateEmployeeEmbeddingsFromCertificates(): Promise<numb
     const text = textMap[employeeId];
 
     if (!text) {
-      await prisma.$executeRaw`
-        UPDATE "EmployeeEmbedding"
-        SET "allexperience" = '', "embedding" = '[]', "isdirty" = 0
-        WHERE "employeeId" = ${employeeId}
-      `;
+      db.prepare(`UPDATE "EmployeeEmbedding" SET "allexperience" = '', "embedding" = '[]', "isdirty" = 0 WHERE "employeeId" = ?`).run(
+        employeeId
+      );
       continue;
     }
 
     const embedding = await generateEmbeddingVector(text);
 
-    await prisma.$executeRaw`
-      UPDATE "EmployeeEmbedding"
-      SET
-        "allexperience" = ${text},
-        "embedding" = ${JSON.stringify(embedding)},
-        "isdirty" = 0
-      WHERE "employeeId" = ${employeeId}
-    `;
+    db.prepare(`UPDATE "EmployeeEmbedding" SET "allexperience" = ?, "embedding" = ?, "isdirty" = 0 WHERE "employeeId" = ?`).run(
+      text,
+      JSON.stringify(embedding),
+      employeeId
+    );
 
     processedCount += 1;
   }

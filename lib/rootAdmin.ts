@@ -9,7 +9,7 @@
 // through the UI — that would defeat the point of having a hardcoded root.
 
 import bcrypt from "bcryptjs";
-import { prisma } from "./prisma";
+import { upsertRootUser } from "./users";
 
 function normalizeEmail(v: string): string {
   return v.trim().toLowerCase();
@@ -40,22 +40,5 @@ export async function ensureRootAdminFromEnv(): Promise<void> {
 
   const email = normalizeEmail(rootEmail);
   const passwordHash = await bcrypt.hash(rootPassword, 10);
-  await prisma.user.upsert({
-    where: { email },
-    update: {
-      passwordHash,
-      role: "root",
-      approved: true,
-      emailVerified: true,
-    },
-    create: {
-      email,
-      passwordHash,
-      role: "root",
-      approved: true,
-      // The root is a bootstrap identity, not a real signup flow — no OTP
-      // to verify against, so it's emailVerified from the start.
-      emailVerified: true,
-    },
-  });
+  upsertRootUser({ email, passwordHash });
 }

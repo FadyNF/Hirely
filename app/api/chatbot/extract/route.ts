@@ -18,7 +18,7 @@ import { extractEmployeeData, extractSingleField, type ChatTurn } from "@/lib/ge
 import { resolveEmployeeMatches, resolveEmployeeQuery } from "@/lib/chatbotResolve";
 import { validateExtractedFields, validateFieldValue } from "@/lib/chatbotValidate";
 import { CREATE_REQUIRED_FIELDS } from "@/lib/tabConfig";
-import { prisma } from "@/lib/prisma";
+import { getEmployeeById } from "@/lib/employees";
 import { requireUserId } from "@/lib/requireAuth";
 
 // Finds the next field to ask about, skipping anything the admin has
@@ -127,10 +127,7 @@ export async function POST(request: NextRequest) {
 
       // Exactly one match — fetch their full Basic Info for a real answer,
       // not just the thin id/name/email summary used for matching.
-      const employee = await prisma.employee.findUnique({
-        where: { id: matches[0].id },
-        include: { experience: true, education: true, certificates: true, skills: true },
-      });
+      const employee = await getEmployeeById(matches[0].id);
       return NextResponse.json({
         action: "info",
         found: true,

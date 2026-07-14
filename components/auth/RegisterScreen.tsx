@@ -9,13 +9,13 @@ import {
   faArrowRight,
   faLock,
   faCircleQuestion,
-  faHeadset,
   faEye,
   faEyeSlash,
   faEnvelope,
 } from '@fortawesome/free-solid-svg-icons';
 import { useAuth } from '@/context';
 import Logo from '@/components/shared/Logo';
+import SupportRequestModal from '@/components/shared/SupportRequestModal';
 
 interface FieldErrors {
   email?: string;
@@ -36,6 +36,7 @@ export default function RegisterScreen({ onSwitchToLogin }: RegisterScreenProps)
   const [errors, setErrors] = useState<FieldErrors>({});
   const [isLoading, setIsLoading] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [supportOpen, setSupportOpen] = useState(false);
 
   // OTP step-2 state — identical mechanics to the real product.
   const [code, setCode] = useState('');
@@ -411,15 +412,14 @@ export default function RegisterScreen({ onSwitchToLogin }: RegisterScreenProps)
         </div>
 
         <div className="animate-login-fade-in-up login-delay-3 flex items-center justify-center gap-4 mt-5">
-          <a href="#" className="login-security-badge text-xs font-medium flex items-center gap-1.5 text-gray-500">
+          <button
+            type="button"
+            onClick={() => setSupportOpen(true)}
+            className="login-security-badge text-xs font-medium flex items-center gap-1.5 text-gray-500"
+          >
             <FontAwesomeIcon icon={faCircleQuestion} className="text-[10px]" />
             Need help?
-          </a>
-          <span className="text-xs" style={{ color: '#E5E7EB' }}>|</span>
-          <a href="#" className="login-security-badge text-xs font-medium flex items-center gap-1.5 text-gray-500">
-            <FontAwesomeIcon icon={faHeadset} className="text-[10px]" />
-            Contact IT Support
-          </a>
+          </button>
         </div>
       </div>
 
@@ -436,6 +436,14 @@ export default function RegisterScreen({ onSwitchToLogin }: RegisterScreenProps)
           &copy; 2026 Hirely. All rights reserved.
         </p>
       </footer>
+
+      {supportOpen && (
+        <SupportRequestModal
+          submitterEmail={email}
+          emailLocked={false}
+          onClose={() => setSupportOpen(false)}
+        />
+      )}
     </div>
   );
 }
