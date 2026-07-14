@@ -4,6 +4,8 @@ import type { NextConfig } from "next";
 // The one thing we need it for right now is the "rewrites" function below.
 
 const nextConfig: NextConfig = {
+  serverExternalPackages: ["pdf-parse", "@napi-rs/canvas"],
+
   async rewrites() {
     return {
       // "beforeFiles" means: check these rules BEFORE Next.js looks at its

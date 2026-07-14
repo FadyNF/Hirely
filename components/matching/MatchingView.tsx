@@ -33,6 +33,43 @@ export default function MatchingView() {
   const [error, setError] = useState<string | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
 
+  // --- PDF upload state ---
+  const [extracting, setExtracting] = useState(false);
+  const [pdfFileName, setPdfFileName] = useState<string | null>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+
+  const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-selecting the same file again later
+    if (!file) return;
+
+    setPdfError(null);
+    setExtracting(true);
+    setPdfFileName(file.name);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const res = await authFetch("/api/job-matching/extract-pdf", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setPdfError(data.error || "Could not extract text from PDF.");
+        return;
+      }
+
+      setJobDescription(data.text || "");
+    } catch {
+      setPdfError("Network error while extracting PDF.");
+    } finally {
+      setExtracting(false);
+    }
+  };
+
   const handleMatch = async () => {
     if (!jobDescription.trim()) return;
     setLoading(true);
@@ -77,19 +114,41 @@ export default function MatchingView() {
         className="rounded-xl border bg-white p-6 mb-6"
         style={{ borderColor: COLORS.border }}
       >
-        <div className="mb-4">
+        {/* --- Label row + PDF upload button --- */}
+        <div className="mb-4 flex items-center justify-between">
           <label
             className="text-sm font-semibold"
             style={{ color: COLORS.black }}
           >
             Job Description
           </label>
+
+          <div className="flex items-center gap-2">
+            <label
+              className="cursor-pointer text-xs font-medium px-3 py-1.5 rounded-lg border hover:bg-gray-50 transition-colors"
+              style={{ borderColor: COLORS.border, color: COLORS.black }}
+            >
+              {extracting ? "Extracting..." : "Upload PDF"}
+              <input
+                type="file"
+                accept="application/pdf"
+                className="hidden"
+                disabled={extracting}
+                onChange={handlePdfUpload}
+              />
+            </label>
+            {pdfFileName && !extracting && (
+              <span className="text-xs" style={{ color: COLORS.gray }}>
+                {pdfFileName}
+              </span>
+            )}
+          </div>
         </div>
 
         <textarea
           value={jobDescription}
           onChange={(e) => setJobDescription(e.target.value)}
-          placeholder="Paste a job description here — responsibilities, required skills, qualifications..."
+          placeholder="Paste a job description here — responsibilities, required skills, qualifications... (or upload a PDF above)"
           rows={6}
           className="w-full rounded-lg border px-4 py-3 text-sm focus:outline-none focus:ring-2 resize-none"
           style={{
@@ -122,7 +181,7 @@ export default function MatchingView() {
 
           <button
             onClick={handleMatch}
-            disabled={loading || !jobDescription.trim()}
+            disabled={loading || extracting || !jobDescription.trim()}
             className="px-5 py-2.5 rounded-lg text-sm font-semibold text-white transition-all duration-200 hover:shadow-md disabled:opacity-50"
             style={{ background: COLORS.red }}
           >
@@ -130,6 +189,19 @@ export default function MatchingView() {
           </button>
         </div>
       </div>
+
+      {pdfError && (
+        <div
+          className="rounded-xl border px-4 py-3 mb-6 text-sm"
+          style={{
+            borderColor: "#FCA5A5",
+            background: COLORS.lightRed,
+            color: "#991B1B",
+          }}
+        >
+          {pdfError}
+        </div>
+      )}
 
       {error && (
         <div
