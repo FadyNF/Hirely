@@ -148,10 +148,10 @@ async function extractJobRequirements(jobDescription: string): Promise<Structure
       requirementText: parsed.requirementText?.trim() || jobDescription.trim(),
     };
 
-    // Prints the extracted requirements object with syntax coloring in Node's terminal
-    console.log("\n\x1b[36m=== Extracted Requirements from Gemini ===\x1b[0m");
-    console.dir(structuredData, { depth: null, colors: true });
-    console.log("\x1b[36m==========================================\x1b[0m\n");
+    // for debugging
+    // console.log("\n\x1b[36m=== Extracted Requirements from Gemini ===\x1b[0m");
+    // console.dir(structuredData, { depth: null, colors: true });
+    // console.log("\x1b[36m==========================================\x1b[0m\n");
 
     return structuredData;
   } catch (error) {
@@ -215,10 +215,10 @@ export async function matchTopProfiles(
   if (requirements.gender) {
     where.gender = { equals: requirements.gender };
   }
-  if (requirements.totalExperience !== null && !isNaN(requirements.totalExperience)) {
+  if (requirements.totalExperience != null && !isNaN(requirements.totalExperience)) {
     where.totalExperience = { gte: requirements.totalExperience };
   }
-  if (requirements.yearsExpElsewedy !== null && !isNaN(requirements.yearsExpElsewedy)) {
+  if (requirements.yearsExpElsewedy != null && !isNaN(requirements.yearsExpElsewedy)) {
     where.yearsExpElsewedy = { gte: requirements.yearsExpElsewedy };
   }
 
