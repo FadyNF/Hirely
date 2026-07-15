@@ -14,7 +14,7 @@
 // field or finish.
 
 import { NextRequest, NextResponse } from "next/server";
-import { extractEmployeeData, extractSingleField, type ChatTurn } from "@/lib/gemini";
+import { extractEmployeeData, extractSelfServiceEmployeeData, extractSingleField, type ChatTurn } from "@/lib/gemini";
 import { resolveEmployeeMatches, resolveEmployeeQuery } from "@/lib/chatbotResolve";
 import { validateExtractedFields, validateFieldValue } from "@/lib/chatbotValidate";
 import { CREATE_REQUIRED_FIELDS } from "@/lib/tabConfig";
@@ -34,6 +34,34 @@ function findNextMissingField(data: Record<string, unknown>): string | undefined
 function stripInternal(data: Record<string, unknown>) {
   const { __skipped, ...rest } = data;
   return rest;
+}
+
+// The scoped employee assistant's whole point is "only your own record" —
+// but the extraction model's system instruction was written for the admin
+// persona (free to ask about anyone) and has no idea this particular
+// caller is restricted. identifierHint is the one field the schema uses
+// specifically to capture WHO a message is about, so checking it here is
+// what turns "silently answer about the caller instead" into an explicit,
+// explained rejection the moment someone else's name/ID shows up in the
+// message. Absent for ordinary first-person phrasing ("what's my email",
+// "do I have any certificates") since there's no other name/ID to extract.
+function identifierHintMeansSomeoneElse(
+  identifierHint: string | undefined,
+  own: { id: number; fullName: string; nationalId: string | null }
+): boolean {
+  const hint = identifierHint?.trim();
+  if (!hint) return false;
+
+  if (/^\d+$/.test(hint)) {
+    // A bare number could be an employee id or (if 14 digits) a national
+    // ID — either way, it's a self-reference only if it actually matches.
+    if (Number(hint) === own.id) return false;
+    if (own.nationalId && hint === own.nationalId) return false;
+    return true;
+  }
+  if (own.nationalId && hint === own.nationalId) return false;
+  if (own.fullName && own.fullName.toLowerCase().includes(hint.toLowerCase())) return false;
+  return true;
 }
 
 export async function POST(request: NextRequest) {
@@ -107,12 +135,22 @@ export async function POST(request: NextRequest) {
     }
 
     // ---- Mode A: a fresh message ----
-    const extracted = await extractEmployeeData(message, (history as ChatTurn[]) || []);
+    // The self-service assistant gets its own system instruction (see
+    // lib/gemini.ts) — the admin one is written entirely from a
+    // third-party-lookup perspective and has no concept of a first-person
+    // "do I have..." question, which used to make those fall through to
+    // intent "unspecified" for an employee caller instead of being
+    // answered.
+    const extracted = isEmployeeCaller
+      ? await extractSelfServiceEmployeeData(message, (history as ChatTurn[]) || [], ownMatch!.fullName)
+      : await extractEmployeeData(message, (history as ChatTurn[]) || []);
 
     if (extracted.intent === "delete") {
       return NextResponse.json({
         action: "unsupported",
-        message: "Deleting an employee isn't available through chat yet — please use the Records page for that.",
+        message: isEmployeeCaller
+          ? "Removing something from your profile isn't available through chat yet — you can remove a single entry (a certificate, a skill) from the Edit profile form instead."
+          : "Deleting an employee isn't available through chat yet — please use the Records page for that.",
       });
     }
 
@@ -122,11 +160,29 @@ export async function POST(request: NextRequest) {
     // was extracted, this is genuinely not an employee-related message.
     // Without this check, an off-topic message would fall through to
     // resolveEmployeeMatches with no name/ID, silently land on "create,"
-    // and show a confusing "new employee, no fields found" card.
+    // and show a confusing "new employee, no fields found" card. The
+    // employee-facing wording is deliberately different, not just a
+    // shared string — "Add a new hire" / "Is there an employee named..."
+    // describe admin-only capabilities (create, search other people) an
+    // employee caller doesn't have at all.
     if (extracted.intent === "unspecified" && !extracted.fullName && !extracted.identifierHint) {
       return NextResponse.json({
         action: "unsupported",
-        message: 'I can only help with creating, updating, or looking up employee records — try something like "Add a new hire..." or "Is there an employee named...".',
+        message: isEmployeeCaller
+          ? 'I can only help with your own profile — try something like "what\'s my phone number?", "do I have any certificates?", or "update my email to...".'
+          : 'I can only help with creating, updating, or looking up employee records — try something like "Add a new hire..." or "Is there an employee named...".',
+      });
+    }
+
+    // Scope guard: an employee-role caller can only ever ask about or
+    // change their OWN record — reject explicitly (with an explanation)
+    // rather than silently answering about the caller instead, which
+    // would look like a wrong answer rather than a restriction.
+    if (isEmployeeCaller && identifierHintMeansSomeoneElse(extracted.identifierHint, ownMatch!)) {
+      return NextResponse.json({
+        action: "unsupported",
+        message:
+          "I can only help with your own profile here — I can't look up or change another employee's record. Try asking about yourself instead, e.g. \"what's my phone number?\" or \"update my email to...\".",
       });
     }
 

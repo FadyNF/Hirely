@@ -172,9 +172,14 @@ export interface ChatTurn {
   text: string;
 }
 
-export async function extractEmployeeData(
+// Shared by extractEmployeeData and extractSelfServiceEmployeeData — same
+// schema, same model/config, the only thing that ever differs between the
+// admin and self-service assistants is the system instruction (i.e. WHO
+// the model should assume it's talking about), never the output shape.
+async function runEmployeeExtraction(
   message: string,
-  history: ChatTurn[] = []
+  history: ChatTurn[],
+  systemInstruction: string
 ): Promise<ExtractedEmployeeData> {
   const contents = [
     ...history.map((turn) => ({ role: turn.role, parts: [{ text: turn.text }] })),
@@ -191,7 +196,7 @@ export async function extractEmployeeData(
       model: "gemini-flash-latest",
       contents,
       config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
+        systemInstruction,
         responseMimeType: "application/json",
         responseSchema: EMPLOYEE_EXTRACTION_SCHEMA,
         // Near-zero temperature: this is a mechanical extraction task, not
@@ -217,6 +222,39 @@ export async function extractEmployeeData(
   // response.text is a JSON STRING (guaranteed to match our schema),
   // not yet a real object — this is the one JSON.parse we need.
   return JSON.parse(response.text ?? "{}");
+}
+
+export async function extractEmployeeData(
+  message: string,
+  history: ChatTurn[] = []
+): Promise<ExtractedEmployeeData> {
+  return runEmployeeExtraction(message, history, SYSTEM_INSTRUCTION);
+}
+
+// The self-service assistant's system instruction is written from a
+// completely different vantage point than the admin one above: the admin
+// instruction only ever describes THIRD-PARTY lookups ("is there an
+// employee named X", "who is employee #5") and has no concept of a
+// first-person question. Reusing it verbatim for the employee-scoped
+// assistant was the real reason "do I have any certificates?" fell
+// through to intent: "unspecified" instead of being recognized as a read
+// question — the model genuinely didn't know who "I" was allowed to mean.
+function selfServiceSystemInstruction(ownerName: string): string {
+  const who = ownerName?.trim() ? ownerName.trim() : "the employee chatting with you";
+  return `You are Hirely's self-service employee assistant. You are talking directly to ONE specific employee — ${who} — and every message is from and about THEM, never anyone else.
+Your ONLY capabilities are: (1) answering questions about THEIR OWN record (e.g. "what's my phone number", "do I have any certificates", "what's my department"), and (2) updating THEIR OWN record (e.g. "update my phone to...", "add a certificate for...").
+Treat first-person pronouns ("I", "me", "my", "mine") as always referring to this one employee — there is no ambiguity about who "I" means, it is always them. A first-person question about their own data is intent "read"; do not classify it as "unspecified" just because no name or ID was mentioned — none is needed, since it's always about them.
+If the message instead asks about or tries to change a DIFFERENT, explicitly named person, still extract identifierHint with that other person's name/ID exactly as given — do not refuse, soften, or leave it blank. A separate access-control check elsewhere is responsible for rejecting that; your only job here is accurate extraction of what was actually said.
+Never answer general knowledge questions or discuss anything unrelated to this employee's own HR record. If asked something genuinely outside this scope (not about them, not about another named person, not employee-record-related at all), set intent to "unspecified" and leave every other field empty.
+Always respond only through the structured schema provided — never in free-form prose.`;
+}
+
+export async function extractSelfServiceEmployeeData(
+  message: string,
+  history: ChatTurn[] = [],
+  ownerName: string = ""
+): Promise<ExtractedEmployeeData> {
+  return runEmployeeExtraction(message, history, selfServiceSystemInstruction(ownerName));
 }
 
 // Per-field descriptions, reused both in the big schema above (implicitly,

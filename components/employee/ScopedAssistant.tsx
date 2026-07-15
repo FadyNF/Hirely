@@ -14,7 +14,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faRobot, faPaperPlane, faCheck, faXmark, faUserPen, faIdCard, faSpinner } from '@fortawesome/free-solid-svg-icons';
-import { BASIC_INFO_FIELDS, BASIC_INFO_LABELS } from '@/lib/tabConfig';
+import { BASIC_INFO_FIELDS, BASIC_INFO_LABELS, MULTI_TAB_CONFIG } from '@/lib/tabConfig';
 import { useAuth } from '@/context/AuthContext';
 
 const COLORS = {
@@ -41,6 +41,7 @@ interface ExtractResponse {
   message?: string;
   found?: boolean;
   employee?: Record<string, unknown>;
+  requestedFields?: string[];
 }
 
 interface Message {
@@ -53,6 +54,78 @@ interface Message {
 
 function genId() {
   return Math.random().toString(36).slice(2);
+}
+
+const RELATION_KEYS = ['experience', 'education', 'certificates', 'skills'] as const;
+
+function isBlankValue(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim().toLowerCase();
+  return trimmed.length === 0 || trimmed === 'null' || trimmed === 'undefined';
+}
+
+// Same per-relation title/subtitle/meta shape ChatbotView.tsx's
+// relationEntrySummary uses, kept small since this only ever needs to
+// answer "what do I have on file for X" — not build/edit anything.
+function relationEntrySummary(key: string, entry: Record<string, unknown>): { title: string; subtitle?: string; meta?: string } {
+  const clean = (v: unknown) => (isBlankValue(v) ? undefined : v);
+  const join = (parts: unknown[], sep: string) => parts.map(clean).filter(Boolean).join(sep) || undefined;
+
+  switch (key) {
+    case 'experience':
+      return {
+        title: join([entry.jobTitle, entry.company], ' at ') ?? 'Untitled role',
+        subtitle: join([entry.startDate, entry.endDate], ' – '),
+      };
+    case 'education':
+      return {
+        title: join([entry.degree, entry.fieldOfStudy], ', ') ?? 'Untitled degree',
+        subtitle: join([entry.institution, entry.graduationYear], ' · '),
+      };
+    case 'certificates':
+      return {
+        title: (clean(entry.certName) as string | undefined) ?? 'Untitled certificate',
+        subtitle: clean(entry.issuer) ? `Issued by ${entry.issuer}` : undefined,
+        meta: [
+          !isBlankValue(entry.issueDate) ? `Issued ${entry.issueDate}` : null,
+          !isBlankValue(entry.expiryDate) ? `Expires ${entry.expiryDate}` : null,
+        ].filter(Boolean).join(' · ') || undefined,
+      };
+    default: // skills
+      return {
+        title: (clean(entry.name) as string | undefined) ?? 'Untitled skill',
+        subtitle: entry.category === 'technical' ? 'Technical' : entry.category === 'language' ? 'Language' : undefined,
+        meta: entry.proficiency != null ? `Proficiency: ${entry.proficiency}%` : undefined,
+      };
+  }
+}
+
+function RelationDetail({ relationKey, employee }: { relationKey: string; employee: Record<string, unknown> }) {
+  const config = MULTI_TAB_CONFIG.find((c) => c.key === relationKey);
+  const label = config?.label ?? relationKey;
+  const entries = (employee[relationKey] as Record<string, unknown>[]) || [];
+  return (
+    <div>
+      <p className="text-[10.5px] font-semibold uppercase tracking-wide mb-1.5" style={{ color: '#9CA3AF' }}>{label}</p>
+      {entries.length === 0 ? (
+        <p className="text-sm italic" style={{ color: '#B0B4BB' }}>Nothing on file yet.</p>
+      ) : (
+        <div className="space-y-1.5">
+          {entries.map((entry, i) => {
+            const { title, subtitle, meta } = relationEntrySummary(relationKey, entry);
+            return (
+              <div key={i} className="rounded-lg px-3 py-2" style={{ backgroundColor: '#F9FAFB', border: `1px solid ${COLORS.border}` }}>
+                <p className="text-sm font-medium" style={{ color: COLORS.black }}>{title}</p>
+                {subtitle && <p className="text-xs" style={{ color: COLORS.gray }}>{subtitle}</p>}
+                {meta && <p className="text-[11px] mt-0.5" style={{ color: '#9CA3AF' }}>{meta}</p>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function summarizeData(data: Record<string, unknown>) {
@@ -87,6 +160,18 @@ function PendingCard({ pending, onConfirm, onCancel }: { pending: ExtractRespons
       );
     }
     const e = pending.employee;
+    // requestedFields (from Gemini's extraction) is what makes this
+    // context-sensitive: empty means "show my whole profile," but a
+    // question like "do I have any certificates?" comes back with
+    // requestedFields: ["certificates"] — without checking it, this used
+    // to always show the same basic-info card regardless of what was
+    // actually asked, which is exactly the "shows my card but never
+    // answers the actual question" complaint.
+    const requested = pending.requestedFields ?? [];
+    const isFullProfile = requested.length === 0;
+    const scalarFields = isFullProfile ? [...BASIC_INFO_FIELDS] : requested.filter((f) => !(RELATION_KEYS as readonly string[]).includes(f));
+    const relationFields = isFullProfile ? [] : requested.filter((f) => (RELATION_KEYS as readonly string[]).includes(f));
+
     return (
       <div className="rounded-xl border bg-white overflow-hidden shadow-sm" style={{ borderColor: COLORS.border }}>
         <div className="px-4 py-3 flex items-center gap-3" style={{ background: `linear-gradient(135deg, ${COLORS.redDark}, ${COLORS.red})` }}>
@@ -95,21 +180,26 @@ function PendingCard({ pending, onConfirm, onCancel }: { pending: ExtractRespons
           </div>
           <p className="text-white font-semibold text-sm truncate">{String(e.fullName || 'Your profile')}</p>
         </div>
-        <div className="p-4 grid grid-cols-2 gap-x-4 gap-y-3">
-          {BASIC_INFO_FIELDS.map((key) => {
-            const raw = e[key];
-            const value = raw === null || raw === undefined || raw === '' ? null : String(raw);
-            return (
-              <div key={key} className="min-w-0">
-                <p className="text-[10.5px] font-semibold uppercase tracking-wide mb-0.5" style={{ color: '#9CA3AF' }}>
-                  {BASIC_INFO_LABELS[key]}
-                </p>
-                <p className="text-sm truncate" style={value ? { color: COLORS.black } : { color: '#B0B4BB', fontStyle: 'italic' }}>
-                  {value ?? 'missing'}
-                </p>
-              </div>
-            );
-          })}
+        <div className="p-4 space-y-4">
+          {scalarFields.length > 0 && (
+            <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+              {scalarFields.map((key) => {
+                const raw = e[key];
+                const value = isBlankValue(raw) ? null : String(raw);
+                return (
+                  <div key={key} className="min-w-0">
+                    <p className="text-[10.5px] font-semibold uppercase tracking-wide mb-0.5" style={{ color: '#9CA3AF' }}>
+                      {BASIC_INFO_LABELS[key] ?? key}
+                    </p>
+                    <p className="text-sm truncate" style={value ? { color: COLORS.black } : { color: '#B0B4BB', fontStyle: 'italic' }}>
+                      {value ?? 'missing'}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {relationFields.map((key) => <RelationDetail key={key} relationKey={key} employee={e} />)}
         </div>
       </div>
     );
@@ -174,17 +264,39 @@ export default function ScopedAssistant({ ownEmployee, onUpdated }: { ownEmploye
     setMessages((prev) => [...prev, { ...m, id: genId(), timestamp: new Date().toISOString() }]);
   };
 
+  // Real conversation memory: without this, every message was sent with
+  // an empty history array (a genuine bug, not a deliberate simplification)
+  // — Gemini had zero context of anything said earlier in the same
+  // conversation, which is why the assistant felt like it kept forgetting
+  // what was just discussed. Mirrors ChatbotView.tsx's buildHistory/
+  // summarizeForHistory pattern, just for the three actions this scoped
+  // assistant can ever produce.
+  const MAX_HISTORY_MESSAGES = 12;
+  const summarizeForHistory = (m: Message): string => {
+    if (m.text) return m.text;
+    if (!m.pending) return '';
+    switch (m.pending.action) {
+      case 'unsupported': return m.pending.message || 'Declined an out-of-scope request.';
+      case 'info': return m.pending.found ? 'Answered a question about the profile.' : 'Could not find the profile.';
+      case 'update': return 'Proposed a profile update, awaiting confirmation.';
+      default: return 'Responded with a structured prompt.';
+    }
+  };
+  const buildHistory = () =>
+    messages.slice(-MAX_HISTORY_MESSAGES).map((m) => ({ role: m.role === 'user' ? 'user' : 'model', text: summarizeForHistory(m) }));
+
   const send = async () => {
     const text = input.trim();
     if (!text || isSending) return;
     setInput('');
+    const history = buildHistory();
     addMessage({ role: 'user', text });
     setIsSending(true);
     try {
       const res = await authFetch('/api/chatbot/extract', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, history: [], lastEmployee: ownEmployee }),
+        body: JSON.stringify({ message: text, history, lastEmployee: ownEmployee }),
       });
       const result = await res.json();
       if (!res.ok) {
