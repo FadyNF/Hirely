@@ -41,7 +41,11 @@ export async function POST(request: NextRequest) {
     const employeeMap = new Map(employees.map((e) => [e.id, e]));
 
     const results = matches.map((m) => ({
-      ...m,
+      employeeId: m.employeeId,
+      text: m.text,
+      matchScore: m.matchScore,
+      positives: m.positives,
+      negatives: m.negatives,
       employee: employeeMap.get(m.employeeId) ?? null,
     }));
 

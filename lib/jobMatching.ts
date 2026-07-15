@@ -3,7 +3,6 @@ import { db, inClause } from "./db";
 
 const SEMANTIC_WEIGHT = 0.7;
 const BM25_WEIGHT = 0.3;
-const RRF_K = 30;
 
 const STOPWORDS = new Set([
   "the", "a", "an", "and", "or", "but", "for", "with", "to", "of", "in", "on", "at", "is",
@@ -17,8 +16,13 @@ type StructuredJobRequirements = {
   gender?: string | null;
   totalExperience?: number | null;
   yearsExpElsewedy?: number | null;
+  requiredSkills?: string[] | null;
+  educationField?: string | null;
   requirementText: string;
 };
+
+const SKILLS_WEIGHT = 0.2;
+const EDUCATION_WEIGHT = 0.1;
 
 function tokenize(text: string): string[] {
   return text
@@ -119,6 +123,8 @@ async function extractJobRequirements(jobDescription: string): Promise<Structure
       "gender": "string ('Male' or 'Female') or null",
       "totalExperience": "number or null",
       "yearsExpElsewedy": "number or null",
+      "requiredSkills": "array of short skill/tech names explicitly required (e.g. ['React', 'SQL', 'AutoCAD']) or null if none are clearly required",
+      "educationField": "string naming the required field of study/degree (e.g. 'Computer Engineering', 'Mechanical Engineering') or null if none is specified",
       "requirementText": "A concise summary of the required technical skills, tech stack, and academic background. CRITICAL: DO NOT mention years of experience, nationality, or gender in this text, as they are already extracted above."
     }
 
@@ -144,6 +150,10 @@ async function extractJobRequirements(jobDescription: string): Promise<Structure
       gender: parsed.gender ?? null,
       totalExperience: parsed.totalExperience ? Number(parsed.totalExperience) : null,
       yearsExpElsewedy: parsed.yearsExpElsewedy ? Number(parsed.yearsExpElsewedy) : null,
+      requiredSkills: Array.isArray(parsed.requiredSkills) && parsed.requiredSkills.length > 0
+        ? parsed.requiredSkills.map((s) => String(s).trim()).filter(Boolean)
+        : null,
+      educationField: parsed.educationField ? String(parsed.educationField).trim() : null,
       requirementText: parsed.requirementText?.trim() || jobDescription.trim(),
     };
 
@@ -164,31 +174,113 @@ async function embedText(text: string): Promise<number[]> {
   return resp.embeddings?.[0]?.values ?? [];
 }
 
-function getSortedIndices(scores: number[]): number[] {
-  return scores
-    .map((score, index) => ({ score, index }))
-    .sort((a, b) => b.score - a.score)
-    .map((item) => item.index);
+function normalizeText(s: string): string {
+  return s.toLowerCase().trim();
 }
 
-function rrfFusion(
-  bm25Ranking: number[],
-  semanticRanking: number[],
+interface SkillMatchDetail {
+  score: number;
+  matched: string[];
+  missing: string[];
+}
+
+// Scored (not hard-filtered) the same way BM25/semantic are — a JD's skill
+// list is a preference ordering, not a strict allowlist, so a candidate
+// missing one required skill is ranked lower, not excluded outright. Keeps
+// the matched/missing skill names (not just the score) so the UI can show
+// them as per-candidate positives/negatives.
+function computeSkillMatchDetails(employeeIds: number[], requiredSkills: string[] | null | undefined): Map<number, SkillMatchDetail> {
+  const details = new Map<number, SkillMatchDetail>();
+  if (!requiredSkills || requiredSkills.length === 0 || employeeIds.length === 0) {
+    return details;
+  }
+
+  const { sql, params } = inClause(employeeIds);
+  const rows = db
+    .prepare(`SELECT "employeeId", "name" FROM "Skill" WHERE "employeeId" IN ${sql}`)
+    .all(...params) as { employeeId: number; name: string }[];
+
+  const skillsByEmployee = new Map<number, string[]>();
+  for (const row of rows) {
+    const list = skillsByEmployee.get(row.employeeId) ?? [];
+    list.push(row.name);
+    skillsByEmployee.set(row.employeeId, list);
+  }
+
+  for (const employeeId of employeeIds) {
+    const skills = skillsByEmployee.get(employeeId) ?? [];
+    const matched: string[] = [];
+    const missing: string[] = [];
+    for (const required of requiredSkills) {
+      const normalizedReq = normalizeText(required);
+      const hit = skills.some((s) => {
+        const normalizedSkill = normalizeText(s);
+        return normalizedSkill.includes(normalizedReq) || normalizedReq.includes(normalizedSkill);
+      });
+      if (hit) matched.push(required);
+      else missing.push(required);
+    }
+    details.set(employeeId, { score: matched.length / requiredSkills.length, matched, missing });
+  }
+  return details;
+}
+
+interface EducationMatchDetail {
+  score: number;
+  matchedField: string | null;
+}
+
+// Same scored (not hard-filtered) approach as skills above.
+function computeEducationMatchDetails(employeeIds: number[], educationField: string | null | undefined): Map<number, EducationMatchDetail> {
+  const details = new Map<number, EducationMatchDetail>();
+  if (!educationField || employeeIds.length === 0) {
+    return details;
+  }
+
+  const { sql, params } = inClause(employeeIds);
+  const rows = db
+    .prepare(`SELECT "employeeId", "fieldOfStudy" FROM "Education" WHERE "employeeId" IN ${sql}`)
+    .all(...params) as { employeeId: number; fieldOfStudy: string }[];
+
+  const fieldsByEmployee = new Map<number, string[]>();
+  for (const row of rows) {
+    const list = fieldsByEmployee.get(row.employeeId) ?? [];
+    list.push(row.fieldOfStudy);
+    fieldsByEmployee.set(row.employeeId, list);
+  }
+
+  const normalizedField = normalizeText(educationField);
+  for (const employeeId of employeeIds) {
+    const fields = fieldsByEmployee.get(employeeId) ?? [];
+    const match = fields.find((f) => {
+      const normalizedF = normalizeText(f);
+      return normalizedF.includes(normalizedField) || normalizedField.includes(normalizedF);
+    });
+    details.set(employeeId, { score: match ? 1 : 0, matchedField: match ?? null });
+  }
+  return details;
+}
+
+// Combines each already-normalized (0-1) component score into one weighted
+// score per candidate, then ranks by it directly. This is the same score
+// shown to the user as "match %" — a prior version fused BM25/semantic via
+// RRF (rank-based) for ranking, but computed a *separate* weighted-average
+// score for display, and the two could disagree (candidate A ranked above B
+// while showing a lower %) since rank position and raw score don't move
+// together. Normalizing every component up front (BM25 via max-scaling,
+// semantic/skills/education already 0-1) means one weighted sum can serve
+// both purposes with no risk of that contradiction.
+function weightedFusion(
+  components: { scores: number[]; weight: number }[],
   nDocs: number
 ): { docIdx: number; score: number }[] {
-  const bm25RankOf = new Map<number, number>();
-  const semRankOf = new Map<number, number>();
-
-  bm25Ranking.forEach((docIdx, rank) => bm25RankOf.set(docIdx, rank + 1));
-  semanticRanking.forEach((docIdx, rank) => semRankOf.set(docIdx, rank + 1));
-
   const fusedScores: { docIdx: number; score: number }[] = [];
 
   for (let docIdx = 0; docIdx < nDocs; docIdx++) {
-    const bm25R = bm25RankOf.get(docIdx) ?? nDocs;
-    const semR = semRankOf.get(docIdx) ?? nDocs;
-    const score =
-      SEMANTIC_WEIGHT / (RRF_K + semR) + BM25_WEIGHT / (RRF_K + bm25R);
+    let score = 0;
+    for (const component of components) {
+      score += component.weight * component.scores[docIdx];
+    }
     fusedScores.push({ docIdx, score });
   }
 
@@ -229,14 +321,16 @@ export async function matchTopProfiles(
   const whereClause = `WHERE ${conditions.join(" AND ")}`;
   const employees = db
     .prepare(
-      `SELECT "Employee"."id" FROM "Employee" LEFT JOIN "User" ON "User"."id" = "Employee"."userId" ${whereClause}`
+      `SELECT "Employee"."id", "Employee"."totalExperience", "Employee"."yearsExpElsewedy"
+       FROM "Employee" LEFT JOIN "User" ON "User"."id" = "Employee"."userId" ${whereClause}`
     )
-    .all(...params) as { id: number }[];
+    .all(...params) as { id: number; totalExperience: number | null; yearsExpElsewedy: number | null }[];
 
   const employeeIds = employees.map((employee) => employee.id);
   if (employeeIds.length === 0) {
     return [];
   }
+  const employeeById = new Map(employees.map((e) => [e.id, e]));
 
   const { sql: idsSql, params: idsParams } = inClause(employeeIds);
   const dbProfiles = db.prepare(`
@@ -258,7 +352,8 @@ export async function matchTopProfiles(
   const tokenizedCorpus = profileTexts.map((txt) => tokenize(txt));
   const bm25 = new BM25Okapi(tokenizedCorpus);
   const bm25Scores = bm25.getScores(tokenize(searchText));
-  const bm25Ranking = getSortedIndices(bm25Scores);
+  const maxBm25 = Math.max(...bm25Scores, 0) || 1;
+  const bm25Norms = bm25Scores.map((s) => Math.max(0, Math.min(1, s / maxBm25)));
 
   const queryVec = await embedText(searchText);
   const semanticScores = dbProfiles.map((profile) => {
@@ -273,16 +368,74 @@ export async function matchTopProfiles(
     }
     return cosineSimilarity(queryVec, profileVec);
   });
-  const semanticRanking = getSortedIndices(semanticScores);
+  const semanticNorms = semanticScores.map((s) => Math.max(0, Math.min(1, s)));
 
-  const fused = rrfFusion(bm25Ranking, semanticRanking, dbProfiles.length);
+  const candidateIds = dbProfiles.map((p) => Number(p.employeeId));
+  const skillMatchDetails = computeSkillMatchDetails(candidateIds, requirements.requiredSkills);
+  const educationMatchDetails = computeEducationMatchDetails(candidateIds, requirements.educationField);
+
+  const skillsWeight = skillMatchDetails.size > 0 ? SKILLS_WEIGHT : 0;
+  const educationWeight = educationMatchDetails.size > 0 ? EDUCATION_WEIGHT : 0;
+  const base = 1 - skillsWeight - educationWeight;
+  const semanticWeightEffective = SEMANTIC_WEIGHT * base;
+  const bm25WeightEffective = BM25_WEIGHT * base;
+
+  const components: { scores: number[]; weight: number }[] = [
+    { scores: semanticNorms, weight: semanticWeightEffective },
+    { scores: bm25Norms, weight: bm25WeightEffective },
+  ];
+  if (skillsWeight > 0) {
+    const skillScoresArr = candidateIds.map((id) => skillMatchDetails.get(id)?.score ?? 0);
+    components.push({ scores: skillScoresArr, weight: skillsWeight });
+  }
+  if (educationWeight > 0) {
+    const eduScoresArr = candidateIds.map((id) => educationMatchDetails.get(id)?.score ?? 0);
+    components.push({ scores: eduScoresArr, weight: educationWeight });
+  }
+
+  const fused = weightedFusion(components, dbProfiles.length);
 
   const limit = topN ?? Math.max(1, Math.ceil(dbProfiles.length * 0.15));
   const topMatches = fused.slice(0, limit);
 
-  return topMatches.map((match) => ({
-    employeeId: Number(dbProfiles[match.docIdx].employeeId),
-    text: dbProfiles[match.docIdx].allexperience ?? "",
-    parsedRequirements: requirements,
-  }));
+  return topMatches.map((match) => {
+    const employeeId = Number(dbProfiles[match.docIdx].employeeId);
+    const employee = employeeById.get(employeeId);
+    const skillDetail = skillMatchDetails.get(employeeId);
+    const eduDetail = educationMatchDetails.get(employeeId);
+
+    const matchScore = Math.round(match.score * 100);
+
+    const positives: string[] = [];
+    const negatives: string[] = [];
+
+    if (requirements.nationality) positives.push(`Nationality: ${requirements.nationality} (required)`);
+    if (requirements.gender) positives.push(`Gender: ${requirements.gender} (required)`);
+    if (requirements.totalExperience != null) {
+      positives.push(`Total experience: ${employee?.totalExperience ?? "?"} yrs (≥ ${requirements.totalExperience} required)`);
+    }
+    if (requirements.yearsExpElsewedy != null) {
+      positives.push(`ElSewedy experience: ${employee?.yearsExpElsewedy ?? "?"} yrs (≥ ${requirements.yearsExpElsewedy} required)`);
+    }
+
+    for (const skill of skillDetail?.matched ?? []) positives.push(`Has required skill: ${skill}`);
+    for (const skill of skillDetail?.missing ?? []) negatives.push(`Missing required skill: ${skill}`);
+
+    if (requirements.educationField) {
+      if (eduDetail?.matchedField) {
+        positives.push(`Education matches: ${eduDetail.matchedField}`);
+      } else {
+        negatives.push(`No degree on file in required field: ${requirements.educationField}`);
+      }
+    }
+
+    return {
+      employeeId,
+      text: dbProfiles[match.docIdx].allexperience ?? "",
+      parsedRequirements: requirements,
+      matchScore,
+      positives,
+      negatives,
+    };
+  });
 }

@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { useAuth } from "@/context";
+import type { SerializedEmployee } from "@/lib/employees";
+import EmployeeDetailModal from "@/components/shared/EmployeeDetailModal";
 
 const COLORS = {
   red: "#DC2626",
@@ -14,6 +16,9 @@ const COLORS = {
 interface MatchResult {
   employeeId: number;
   text: string;
+  matchScore: number;
+  positives: string[];
+  negatives: string[];
   employee: {
     id: number;
     fullName: string;
@@ -37,6 +42,30 @@ export default function MatchingView() {
   const [extracting, setExtracting] = useState(false);
   const [pdfFileName, setPdfFileName] = useState<string | null>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
+
+  // --- Candidate detail popup state (read-only — the same view-only modal
+  // Records uses; a card click here never opens the editable form) ---
+  const [detailEmployee, setDetailEmployee] = useState<SerializedEmployee | null>(null);
+  const [detailLoadingId, setDetailLoadingId] = useState<number | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
+
+  const handleCardClick = async (employeeId: number) => {
+    setDetailError(null);
+    setDetailLoadingId(employeeId);
+    try {
+      const res = await authFetch(`/api/chatbot/employee/${employeeId}`);
+      const data = await res.json();
+      if (!res.ok) {
+        setDetailError(data.error || "Could not load this employee's record.");
+        return;
+      }
+      setDetailEmployee(data.employee);
+    } catch {
+      setDetailError("Network error while loading the record.");
+    } finally {
+      setDetailLoadingId(null);
+    }
+  };
 
   const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -190,6 +219,19 @@ export default function MatchingView() {
         </div>
       </div>
 
+      {detailError && (
+        <div
+          className="rounded-xl border px-4 py-3 mb-6 text-sm"
+          style={{
+            borderColor: "#FCA5A5",
+            background: COLORS.lightRed,
+            color: "#991B1B",
+          }}
+        >
+          {detailError}
+        </div>
+      )}
+
       {pdfError && (
         <div
           className="rounded-xl border px-4 py-3 mb-6 text-sm"
@@ -247,7 +289,8 @@ export default function MatchingView() {
               return (
                 <div
                   key={match.employeeId}
-                  className="rounded-xl border bg-white p-5 transition-all duration-200 hover:shadow-md hover:-translate-y-0.5"
+                  onClick={() => handleCardClick(match.employeeId)}
+                  className="rounded-xl border bg-white p-5 transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 cursor-pointer"
                   style={{ borderColor: COLORS.border }}
                 >
                   <div className="flex items-center gap-4 min-w-0">
@@ -258,7 +301,14 @@ export default function MatchingView() {
                         color: idx < 3 ? COLORS.red : COLORS.gray,
                       }}
                     >
-                      {idx + 1}
+                      {detailLoadingId === match.employeeId ? (
+                        <span
+                          className="w-3.5 h-3.5 rounded-full border-2 animate-spin"
+                          style={{ borderColor: idx < 3 ? COLORS.red : COLORS.gray, borderTopColor: "transparent" }}
+                        />
+                      ) : (
+                        idx + 1
+                      )}
                     </div>
 
                     <div className="min-w-0 flex-1">
@@ -286,6 +336,18 @@ export default function MatchingView() {
                         )}
                       </div>
                     </div>
+
+                    {typeof match.matchScore === "number" && (
+                      <div
+                        className="shrink-0 text-xs font-bold px-2.5 py-1 rounded-full"
+                        style={{
+                          background: match.matchScore >= 60 ? "#DCFCE7" : match.matchScore >= 35 ? "#FEF9C3" : COLORS.lightRed,
+                          color: match.matchScore >= 60 ? "#166534" : match.matchScore >= 35 ? "#854D0E" : "#991B1B",
+                        }}
+                      >
+                        {match.matchScore}% match
+                      </div>
+                    )}
                   </div>
 
                   {match.text && (
@@ -296,11 +358,41 @@ export default function MatchingView() {
                       {match.text}
                     </p>
                   )}
+
+                  {((match.positives?.length ?? 0) > 0 || (match.negatives?.length ?? 0) > 0) && (
+                    <div className="flex flex-wrap gap-1.5 mt-3">
+                      {match.positives.map((p, i) => (
+                        <span
+                          key={`p-${i}`}
+                          className="text-[11px] px-2 py-1 rounded-md"
+                          style={{ background: "#DCFCE7", color: "#166534" }}
+                        >
+                          + {p}
+                        </span>
+                      ))}
+                      {match.negatives.map((n, i) => (
+                        <span
+                          key={`n-${i}`}
+                          className="text-[11px] px-2 py-1 rounded-md"
+                          style={{ background: COLORS.lightRed, color: "#991B1B" }}
+                        >
+                          − {n}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })}
           </div>
         </div>
+      )}
+
+      {detailEmployee && (
+        <EmployeeDetailModal
+          employee={detailEmployee}
+          onClose={() => setDetailEmployee(null)}
+        />
       )}
     </div>
   );
