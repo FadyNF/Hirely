@@ -1,9 +1,12 @@
 // app/app/employee/page.tsx
 //
-// Self-service view: an "employee"-role user's own record + a chatbot
-// scoped to just that record. Gated the same way app/app/admin/page.tsx
-// gates root — a non-employee (admin/root) who navigates here directly
-// gets redirected to /app rather than shown an error page.
+// Self-service My Profile view: an "employee"-role user's own record.
+// The scoped Assistant chat is its own sibling route now
+// (/app/employee/assistant) rather than a tab here — see
+// components/layout/Sidebar.tsx's employee nav. Gated the same way
+// app/app/admin/page.tsx gates root — a non-employee (admin/root) who
+// navigates here directly gets redirected to /app rather than shown an
+// error page.
 
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";

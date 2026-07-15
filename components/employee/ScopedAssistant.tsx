@@ -13,7 +13,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faRobot, faPaperPlane, faCheck, faXmark, faUserPen, faIdCard, faSpinner } from '@fortawesome/free-solid-svg-icons';
+import { faRobot, faPaperPlane, faIdCard, faSpinner } from '@fortawesome/free-solid-svg-icons';
 import { BASIC_INFO_FIELDS, BASIC_INFO_LABELS, MULTI_TAB_CONFIG } from '@/lib/tabConfig';
 import { useAuth } from '@/context/AuthContext';
 
@@ -142,7 +142,12 @@ function summarizeData(data: Record<string, unknown>) {
   return lines;
 }
 
-function PendingCard({ pending, onConfirm, onCancel }: { pending: ExtractResponse; onConfirm: () => void; onCancel: () => void }) {
+// Only ever renders 'unsupported' or 'info' now — an 'update' response is
+// intercepted in send() below and handed off to the real EmployeeForm
+// modal instead of a lightweight in-chat confirm card, so the same full
+// validation the "Edit profile" button gets (required fields, enum
+// dropdowns, date/format checks) applies to chat-driven edits too.
+function PendingCard({ pending }: { pending: ExtractResponse }) {
   if (pending.action === 'unsupported') {
     return (
       <div className="rounded-lg border p-4 text-sm" style={{ borderColor: COLORS.border, color: COLORS.gray }}>
@@ -205,51 +210,19 @@ function PendingCard({ pending, onConfirm, onCancel }: { pending: ExtractRespons
     );
   }
 
-  // action === 'update'
-  const summary = summarizeData(pending.data || {});
-  return (
-    <div className="rounded-xl border bg-white p-4" style={{ borderColor: COLORS.border }}>
-      <div className="flex items-center gap-2 mb-3">
-        <FontAwesomeIcon icon={faUserPen} style={{ color: COLORS.red }} />
-        <p className="text-sm font-medium" style={{ color: COLORS.black }}>Update your profile?</p>
-      </div>
-      {pending.warnings && pending.warnings.length > 0 && (
-        <div className="rounded-lg p-2.5 mb-2 space-y-1" style={{ backgroundColor: COLORS.pinkBg }}>
-          {pending.warnings.map((w, i) => (
-            <p key={i} className="text-xs" style={{ color: COLORS.red }}>{w}</p>
-          ))}
-        </div>
-      )}
-      <div className="rounded-lg p-3 mb-3 space-y-1" style={{ backgroundColor: '#F9FAFB' }}>
-        {summary.length === 0 ? (
-          <p className="text-xs" style={{ color: COLORS.gray }}>No recognizable fields were extracted.</p>
-        ) : (
-          summary.map((line, i) => <p key={i} className="text-xs" style={{ color: COLORS.gray }}>{line}</p>)
-        )}
-      </div>
-      <div className="flex gap-2">
-        <button
-          onClick={onConfirm}
-          className="flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg text-white transition-opacity hover:opacity-90"
-          style={{ backgroundColor: COLORS.red }}
-        >
-          <FontAwesomeIcon icon={faCheck} className="text-xs" />
-          Confirm update
-        </button>
-        <button
-          onClick={onCancel}
-          className="flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg border transition-colors hover:bg-gray-50"
-          style={{ borderColor: COLORS.border, color: COLORS.gray }}
-        >
-          <FontAwesomeIcon icon={faXmark} className="text-xs" />
-          Cancel
-        </button>
-      </div>
-    </div>
-  );
+  return null;
 }
 
-export default function ScopedAssistant({ ownEmployee, onUpdated }: { ownEmployee: OwnEmployee; onUpdated: () => void }) {
+export default function ScopedAssistant({
+  ownEmployee,
+  onRequestEdit,
+}: {
+  ownEmployee: OwnEmployee;
+  // Hands an 'update' extraction off to the real EmployeeForm modal
+  // (rendered by the parent) instead of committing it directly from the
+  // chat — see the comment on PendingCard above for why.
+  onRequestEdit: (data: Record<string, unknown>) => void;
+}) {
   const { authFetch } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -303,38 +276,31 @@ export default function ScopedAssistant({ ownEmployee, onUpdated }: { ownEmploye
         addMessage({ role: 'bot', text: result.error || 'Something went wrong — please try again.' });
         return;
       }
+
+      // An 'update' never gets committed straight from the chat — it's
+      // handed off to the real EmployeeForm modal so the exact same full
+      // validation the "Edit profile" button gets (required fields, enum
+      // dropdowns, date/format checks) applies here too, instead of the
+      // lighter server-only check the direct-commit path relied on alone.
+      if (result.action === 'update') {
+        const summary = summarizeData(result.data || {});
+        addMessage({
+          role: 'bot',
+          text:
+            summary.length > 0
+              ? `Opening the edit form with what you mentioned pre-filled:\n${summary.join(', ')}`
+              : "I've opened the edit form — I couldn't pick out a specific field, so review and fill in what you meant there.",
+        });
+        onRequestEdit(result.data || {});
+        return;
+      }
+
       addMessage({ role: 'bot', pending: result as ExtractResponse });
     } catch {
       addMessage({ role: 'bot', text: 'Something went wrong reaching the server — please try again.' });
     } finally {
       setIsSending(false);
     }
-  };
-
-  const confirmUpdate = async (messageId: string, data: Record<string, unknown>) => {
-    setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, pending: undefined, text: 'Applying update…' } : m)));
-    try {
-      const res = await authFetch('/api/chatbot/commit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'update', data }),
-      });
-      const result = await res.json();
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === messageId
-            ? { ...m, text: res.ok ? 'Your profile has been updated.' : result.error || "That didn't go through — please try again." }
-            : m
-        )
-      );
-      if (res.ok) onUpdated();
-    } catch {
-      setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, text: 'Something went wrong saving that.' } : m)));
-    }
-  };
-
-  const cancelUpdate = (messageId: string) => {
-    setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, pending: undefined, text: 'No changes made.' } : m)));
   };
 
   return (
@@ -344,7 +310,7 @@ export default function ScopedAssistant({ ownEmployee, onUpdated }: { ownEmploye
           <div className="text-center py-10">
             <FontAwesomeIcon icon={faRobot} className="text-2xl mb-2" style={{ color: COLORS.red }} />
             <p className="text-sm" style={{ color: COLORS.gray }}>
-              Ask about your own profile, or tell me what to update — e.g. &quot;update my phone to 01012345678&quot;.
+              Ask about your own profile, or tell me what to update — e.g. &quot;update my phone to 01012345678&quot; — and I&apos;ll open the edit form pre-filled so you can review and save.
             </p>
           </div>
         )}
@@ -353,7 +319,7 @@ export default function ScopedAssistant({ ownEmployee, onUpdated }: { ownEmploye
             <div className={`max-w-[85%] ${m.role === 'user' ? '' : 'w-full'}`}>
               {m.text && (
                 <div
-                  className="rounded-xl px-3.5 py-2 text-sm"
+                  className="rounded-xl px-3.5 py-2 text-sm whitespace-pre-wrap"
                   style={m.role === 'user' ? { backgroundColor: COLORS.red, color: 'white' } : { backgroundColor: '#F3F4F6', color: COLORS.black }}
                 >
                   {m.text}
@@ -361,11 +327,7 @@ export default function ScopedAssistant({ ownEmployee, onUpdated }: { ownEmploye
               )}
               {m.pending && (
                 <div className="mt-1">
-                  <PendingCard
-                    pending={m.pending}
-                    onConfirm={() => confirmUpdate(m.id, m.pending!.data || {})}
-                    onCancel={() => cancelUpdate(m.id)}
-                  />
+                  <PendingCard pending={m.pending} />
                 </div>
               )}
             </div>

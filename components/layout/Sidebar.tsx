@@ -41,10 +41,12 @@ const NAV_ITEMS = [
 ];
 
 // An "employee"-role user gets none of the company-wide surfaces above —
-// just their own profile (which itself has a My Profile / Assistant tab
-// switcher, see app/app/employee/page.tsx).
+// just their own profile and its scoped chatbot, each its own route
+// (rather than an in-page tab switcher) so navigation between them is
+// consistent with how every other role gets around: via the sidebar.
 const EMPLOYEE_NAV_ITEMS = [
   { href: '/app/employee', label: 'My Profile', icon: faIdCard },
+  { href: '/app/employee/assistant', label: 'Assistant', icon: faComments },
 ];
 
 function NavLink({
@@ -100,11 +102,15 @@ export default function Sidebar() {
   const isEmployee = user?.role === 'employee';
   const navItems = isEmployee ? EMPLOYEE_NAV_ITEMS : NAV_ITEMS;
 
-  // Exact match for "/app" (Dashboard), but a "starts with" check for the
-  // others — so "/app/records/123" (a future detail view) still highlights
+  // Exact match for "/app" (Dashboard) and "/app/employee" (My Profile) —
+  // both are prefixes of other real routes ("/app/admin", "/app/employee/
+  // assistant") that need their OWN nav item highlighted instead, not a
+  // plain "starts with". Every other item gets a "starts with" check, so
+  // e.g. a future "/app/records/123" detail view still highlights
   // "Records" as active, not just the exact bare URL.
+  const EXACT_MATCH_HREFS = new Set(['/app', '/app/employee']);
   const isActive = (href: string) =>
-    href === '/app' ? pathname === '/app' : pathname.startsWith(href);
+    EXACT_MATCH_HREFS.has(href) ? pathname === href : pathname.startsWith(href);
 
   return (
     <aside
