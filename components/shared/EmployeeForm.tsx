@@ -82,7 +82,7 @@ const OPTIONAL_INPUT: Record<string, { type: BasicInputType; placeholder?: strin
   totalExperience: { type: 'number', placeholder: 'e.g. 3' },
 };
 
-type RelFieldType = 'text' | 'date' | 'endDate' | 'number' | 'textarea' | 'select' | 'gpa';
+type RelFieldType = 'text' | 'date' | 'endDate' | 'number' | 'textarea' | 'select' | 'gpa' | 'hidden';
 
 interface RelFieldSpec {
   key: string;
@@ -135,6 +135,11 @@ const RELATION_UI: Record<RelationKey, { label: string; singular: string; fields
       // kept visible so the admin can double-check what Gemini parsed
       // this entry from.
       { key: 'rawText', label: 'Original Source Text', type: 'textarea', placeholder: 'Optional' },
+      // Only ever populated via the self-service certificate-upload flow.
+      // 'hidden' renders nothing — see renderRelationField — this entry
+      // exists purely so a save made from this generic form doesn't drop
+      // the link to an uploaded file.
+      { key: 'attachmentPath', label: 'Attachment', type: 'hidden' },
     ],
   },
   skills: {
@@ -545,6 +550,18 @@ export default function EmployeeForm({
     const key = `${rk}.${index}.${spec.key}`;
     const err = errors[key];
     const isOptional = (RELATION_FIELDS[rk].optional as readonly string[]).includes(spec.key);
+
+    // Carries a value through read -> form state -> submit without any
+    // editable UI — used for certificates.attachmentPath (a path set only
+    // by the upload flow; retyping it here would be meaningless and
+    // risky). Rendering it as nothing (rather than omitting it from
+    // RELATION_UI entirely) is what makes the round-trip work: without a
+    // 'fields' entry, readRelation/buildEntries would never carry it
+    // through a save made from this generic form, silently orphaning the
+    // uploaded file from its Certificate row.
+    if (spec.type === 'hidden') {
+      return null;
+    }
 
     const labelEl = (
       <label className="block text-xs font-medium mb-1" style={{ color: COLORS.gray }}>

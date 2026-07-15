@@ -1,16 +1,19 @@
 // app/app/admin/page.tsx
 //
-// Root-only console: promote employees to admin + open support/issue
-// submissions. Server Component that hard-checks the role via
-// requireRootUserIdFromServerCookies — a plain admin/employee who guesses
-// this URL gets redirected the same way a logged-out visitor would.
+// Root-only console index: promote employees to admin. Server Component
+// that hard-checks the role via requireRootUserIdFromServerCookies — a
+// plain admin/employee who guesses this URL gets redirected the same way
+// a logged-out visitor would. Split out of the old single-page
+// AdminConsoleView into three routes (this one, /admins, /support-requests)
+// so each list can be paginated independently instead of one long scroll.
 
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { findEmployeeUsers } from "@/lib/users";
-import { listSupportRequestsForAdmin } from "@/lib/supportRequests";
 import { requireRootUserIdFromServerCookies } from "@/lib/requireAuth";
-import AdminConsoleView, { type EmployeeUser, type SupportRequestSummary } from "@/components/admin/AdminConsoleView";
+import AdminSubNav from "@/components/admin/AdminSubNav";
+import PromoteToAdminSection from "@/components/admin/PromoteToAdminSection";
+import type { RoleUser } from "@/components/admin/UserRoleActionList";
 
 export const metadata: Metadata = { title: "Admin" };
 
@@ -22,26 +25,33 @@ export default async function AdminPage() {
   if (!rootId) redirect("/app");
 
   const employeeUsers = findEmployeeUsers();
-  const supportRequests = listSupportRequestsForAdmin();
-
-  // Serialize Date -> ISO string for the Client Component boundary.
-  const pending: EmployeeUser[] = employeeUsers.map((u) => ({
+  const users: RoleUser[] = employeeUsers.map((u) => ({
     id: u.id,
     email: u.email,
     fullName: u.fullName,
     createdAtIso: u.createdAt.toISOString(),
   }));
-  const requests: SupportRequestSummary[] = supportRequests.map((r) => ({
-    id: r.id,
-    type: r.type,
-    subject: r.subject,
-    message: r.message,
-    status: r.status,
-    rootReply: r.rootReply,
-    submittedByEmail: r.submittedByEmail,
-    submittedById: r.submittedById,
-    createdAtIso: r.createdAt.toISOString(),
-  }));
 
-  return <AdminConsoleView pending={pending} requests={requests} />;
+  return (
+    <div className="p-8 space-y-6">
+      <div>
+        <h1 className="text-xl font-semibold" style={{ color: "#111111" }}>
+          Admin <span style={{ color: "#DC2626" }}>Console</span>
+        </h1>
+        <p className="text-sm" style={{ color: "#6B7280" }}>
+          Promote employees, manage admins, and respond to support requests
+        </p>
+      </div>
+      <AdminSubNav />
+      <div className="rounded-xl border bg-white p-6" style={{ borderColor: "#E5E5E5" }}>
+        <div className="mb-5">
+          <h2 className="text-lg font-semibold" style={{ color: "#111111" }}>Promote to admin</h2>
+          <p className="text-sm mt-0.5" style={{ color: "#6B7280" }}>
+            Every self-service employee account — pick who should also get admin access
+          </p>
+        </div>
+        <PromoteToAdminSection users={users} />
+      </div>
+    </div>
+  );
 }

@@ -16,6 +16,7 @@ import { useAuth } from '@/context/AuthContext';
 import { parseGpaValue } from '@/lib/chatbotValidate';
 import EmployeeForm, { type BuiltEmployeeData, type SubmitResult } from '@/components/shared/EmployeeForm';
 import ScopedAssistant from '@/components/employee/ScopedAssistant';
+import CertificateUpload from '@/components/employee/CertificateUpload';
 
 const COLORS = {
   red: '#DC2626',
@@ -202,6 +203,27 @@ export default function EmployeeSelfServiceView() {
                   );
                 })}
               </div>
+
+              {((employee.certificates as Record<string, unknown>[]) || []).some((c) => c.attachmentPath) && (
+                <div className="flex flex-wrap gap-2">
+                  {((employee.certificates as Record<string, unknown>[]) || [])
+                    .filter((c) => c.attachmentPath)
+                    .map((c) => (
+                      <a
+                        key={c.id as number}
+                        href={`/api/certificates/${c.id}/attachment`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs underline underline-offset-2"
+                        style={{ color: COLORS.gray }}
+                      >
+                        View {String(c.certName) || 'attachment'}
+                      </a>
+                    ))}
+                </div>
+              )}
+
+              <CertificateUpload onSaved={reload} />
             </>
           ) : null}
         </div>

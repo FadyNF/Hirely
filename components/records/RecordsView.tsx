@@ -251,13 +251,30 @@ function MultiEntryDetail({
     return (
         <div>
             {entries.map((entry, i) => (
-                <EntryCard
-                    key={i}
-                    fields={fields}
-                    entry={entry}
-                    index={i}
-                    label={config.label}
-                />
+                <div key={i}>
+                    <EntryCard
+                        fields={fields}
+                        entry={entry}
+                        index={i}
+                        label={config.label}
+                    />
+                    {/* Only certificates can have an uploaded attachment
+                        (see the employee self-service certificate-upload
+                        feature) — experience/education entries never have
+                        this field, so entry.attachmentPath is simply
+                        undefined for them. */}
+                    {tabKey === "certificates" && Boolean(entry.attachmentPath) && (
+                        <a
+                            href={`/api/certificates/${entry.id}/attachment`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs underline underline-offset-2 -mt-2 mb-3 inline-block"
+                            style={{ color: COLORS.red }}
+                        >
+                            View attachment
+                        </a>
+                    )}
+                </div>
             ))}
         </div>
     );

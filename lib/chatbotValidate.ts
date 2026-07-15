@@ -347,7 +347,7 @@ function isValidProficiency(v: unknown): boolean {
 export const RELATION_FIELDS = {
   experience: { required: ["jobTitle", "company", "startDate", "endDate"], optional: ["description"] },
   education: { required: ["degree", "fieldOfStudy", "institution", "graduationYear"], optional: ["gpa"] },
-  certificates: { required: ["certName", "issuer", "issueDate"], optional: ["expiryDate", "rawText"] },
+  certificates: { required: ["certName", "issuer", "issueDate"], optional: ["expiryDate", "rawText", "attachmentPath"] },
   skills: { required: ["category", "name", "proficiency"], optional: [] },
   // score here is a PERCENTAGE (0-100) — that's the unit the admin actually
   // types into the form. It gets divided by 100 into the fraction the
@@ -601,9 +601,11 @@ function validateCertificateEntries(entries: unknown): RelationCheck {
         data.expiryDate = e.expiryDate;
       }
     }
-    // Provenance only (which Excel-import source line this came from, if
-    // any) — no shape to validate, just kept if present.
+    // Provenance only (which Excel-import source line this came from, or
+    // which locally-saved file this was parsed from, if either) — no
+    // shape to validate, just kept if present.
     if (isNonEmptyText(e.rawText)) data.rawText = e.rawText;
+    if (isNonEmptyText(e.attachmentPath)) data.attachmentPath = e.attachmentPath;
 
     result.push({ data, valid });
   });

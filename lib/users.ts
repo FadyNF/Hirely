@@ -164,3 +164,24 @@ export function findEmployeeUsers(): { id: number; email: string; fullName: stri
     createdAt: new Date(r.createdAt),
   }));
 }
+
+// Demotion candidates for the root console's "Admins" list — every
+// currently-promoted admin (never root, which isn't reachable through
+// promote/demote at all). Same shape as findEmployeeUsers() so both lists
+// render through the same row markup.
+export function findAdminUsers(): { id: number; email: string; fullName: string | null; createdAt: Date }[] {
+  const rows = db
+    .prepare(
+      `SELECT u."id", u."email", u."createdAt", e."fullName" as "employeeFullName"
+       FROM "User" u LEFT JOIN "Employee" e ON e."userId" = u."id"
+       WHERE u."role" = 'admin'
+       ORDER BY u."createdAt" ASC`
+    )
+    .all() as { id: number; email: string; createdAt: string; employeeFullName: string | null }[];
+  return rows.map((r) => ({
+    id: r.id,
+    email: r.email,
+    fullName: r.employeeFullName || null,
+    createdAt: new Date(r.createdAt),
+  }));
+}

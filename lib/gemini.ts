@@ -269,3 +269,57 @@ export async function extractSingleField(field: string, message: string): Promis
   const parsed = JSON.parse(response.text ?? "{}");
   return typeof parsed.value === "string" && parsed.value.trim().length > 0 ? parsed.value.trim() : null;
 }
+
+// ---------------------------------------------------------------------------
+// Certificate upload — the first multimodal (image/PDF) call in this
+// codebase. Every other Gemini call here sends text-only `contents`; this
+// one sends an `inlineData` part (base64 file bytes) alongside a plain
+// text instruction, in the same `parts` array shape already used above.
+// ---------------------------------------------------------------------------
+
+export interface ExtractedCertificateData {
+  certName?: string;
+  issuer?: string;
+  issueDate?: string;
+  expiryDate?: string;
+}
+
+const CERTIFICATE_SYSTEM_INSTRUCTION = `You are reading an uploaded image or PDF of a professional certificate/certification document. Extract only what is actually printed on the document — never invent or guess a value that isn't visibly present. Leave a field out entirely if the document doesn't state it.`;
+
+const CERTIFICATE_EXTRACTION_SCHEMA = {
+  type: "object",
+  properties: {
+    certName: { type: "string", description: "The name/title of the certificate or certification exactly as printed on the document." },
+    issuer: { type: "string", description: "The issuing organization or institution." },
+    issueDate: { type: "string", description: "The date the certificate was issued. Format YYYY-MM-DD if a full date is determinable, otherwise whatever precision the document actually gives." },
+    expiryDate: { type: "string", description: "The expiry / valid-until date, only if the document states one." },
+  },
+};
+
+export async function extractCertificateFromFile(fileBuffer: Buffer, mimeType: string): Promise<ExtractedCertificateData> {
+  const response = await withTimeout(
+    ai.models.generateContent({
+      model: "gemini-flash-latest",
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { inlineData: { mimeType, data: fileBuffer.toString("base64") } },
+            { text: "Extract the certificate's name, issuer, issue date, and expiry date (if present) from this document." },
+          ],
+        },
+      ],
+      config: {
+        systemInstruction: CERTIFICATE_SYSTEM_INSTRUCTION,
+        responseMimeType: "application/json",
+        responseSchema: CERTIFICATE_EXTRACTION_SCHEMA,
+        temperature: 0.1,
+        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+      },
+    }),
+    30000,
+    "Certificate extraction"
+  );
+
+  return JSON.parse(response.text ?? "{}");
+}

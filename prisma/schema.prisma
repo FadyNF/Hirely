@@ -217,6 +217,11 @@ model Certificate {
   // so the admin can see what Gemini parsed the row from. Null for
   // certificates entered any other way.
   rawText    String?
+  // Relative path (under the local data/certificates/ folder — see
+  // app/api/employee/certificates/upload/route.ts) to the original
+  // uploaded image/PDF this entry was parsed from. Null for every
+  // certificate entered any other way (manual form entry, Excel import).
+  attachmentPath String?
 
   employeeId Int
   employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)

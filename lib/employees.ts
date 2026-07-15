@@ -36,6 +36,7 @@ export interface Certificate {
   issueDate: string;
   expiryDate: string | null;
   rawText: string | null;
+  attachmentPath: string | null;
   employeeId: number;
 }
 
@@ -120,8 +121,22 @@ function attachRelations(employees: EmployeeRow[]): EmployeeWithRelations[] {
   return employees.map((e) => byEmployee.get(e.id)!);
 }
 
+// Excludes an admin/root's own linked Employee record from every
+// company-wide listing — once someone is staff, they're not a tracked HR
+// record to search/page through anymore. This is a LEFT JOIN condition,
+// not a stored flag: demoting an admin back to "employee" makes their
+// row reappear automatically on the next query, no extra bookkeeping.
+// Root never has a linked Employee row to begin with (bootstrapped from
+// env, not created via signup), so it's covered by the same condition.
+const EXCLUDE_STAFF_JOIN = `LEFT JOIN "User" ON "User"."id" = "Employee"."userId"`;
+const EXCLUDE_STAFF_CONDITION = `("User"."id" IS NULL OR "User"."role" = 'employee')`;
+
 export async function getAllEmployees(): Promise<EmployeeWithRelations[]> {
-  const employees = db.prepare(`SELECT * FROM "Employee" ORDER BY "id" ASC`).all() as EmployeeRow[];
+  const employees = db
+    .prepare(
+      `SELECT "Employee".* FROM "Employee" ${EXCLUDE_STAFF_JOIN} WHERE ${EXCLUDE_STAFF_CONDITION} ORDER BY "Employee"."id" ASC`
+    )
+    .all() as EmployeeRow[];
   return attachRelations(employees);
 }
 
@@ -129,6 +144,14 @@ export async function getEmployeeById(id: number): Promise<EmployeeWithRelations
   const employee = db.prepare(`SELECT * FROM "Employee" WHERE "id" = ?`).get(id) as EmployeeRow | undefined;
   if (!employee) return null;
   return attachRelations([employee])[0];
+}
+
+// Used by the certificate-attachment download route to resolve ownership
+// (which employeeId a given Certificate belongs to) before deciding
+// whether the caller is allowed to fetch the file.
+export function getCertificateById(id: number): Certificate | null {
+  const row = db.prepare(`SELECT * FROM "Certificate" WHERE "id" = ?`).get(id) as Certificate | undefined;
+  return row ?? null;
 }
 
 // Resolves a logged-in User to the Employee record they own, for the
@@ -175,39 +198,45 @@ export interface EmployeeFilters {
 }
 
 export async function getFilteredEmployees(filters: EmployeeFilters): Promise<EmployeeWithRelations[]> {
-  const conditions: string[] = [];
+  // Every column reference here is qualified with "Employee". — the new
+  // EXCLUDE_STAFF_JOIN below joins in "User", which also has "email" and
+  // "createdAt" columns, so an unqualified "email" would be an ambiguous
+  // reference the moment that join is present.
+  const conditions: string[] = [EXCLUDE_STAFF_CONDITION];
   const params: (string | number)[] = [];
 
   if (filters.search) {
     conditions.push(
-      `("fullName" LIKE ? OR "email" LIKE ? OR "workLocation" LIKE ? OR "nationalId" LIKE ? OR "position" LIKE ?)`
+      `("Employee"."fullName" LIKE ? OR "Employee"."email" LIKE ? OR "Employee"."workLocation" LIKE ? OR "Employee"."nationalId" LIKE ? OR "Employee"."position" LIKE ?)`
     );
     const like = `%${filters.search}%`;
     params.push(like, like, like, like, like);
   }
   if (filters.department) {
-    conditions.push(`"workLocation" = ?`);
+    conditions.push(`"Employee"."workLocation" = ?`);
     params.push(filters.department);
   }
   if (filters.gender) {
-    conditions.push(`"gender" = ?`);
+    conditions.push(`"Employee"."gender" = ?`);
     params.push(filters.gender);
   }
   if (filters.nationality) {
-    conditions.push(`"nationality" = ?`);
+    conditions.push(`"Employee"."nationality" = ?`);
     params.push(filters.nationality);
   }
   if (filters.maritalStatus) {
-    conditions.push(`"maritalStatus" = ?`);
+    conditions.push(`"Employee"."maritalStatus" = ?`);
     params.push(filters.maritalStatus);
   }
   if (filters.militaryStatus) {
-    conditions.push(`"militaryStatus" = ?`);
+    conditions.push(`"Employee"."militaryStatus" = ?`);
     params.push(filters.militaryStatus);
   }
 
-  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-  const employees = db.prepare(`SELECT * FROM "Employee" ${where} ORDER BY "id" ASC`).all(...params) as EmployeeRow[];
+  const where = `WHERE ${conditions.join(" AND ")}`;
+  const employees = db
+    .prepare(`SELECT "Employee".* FROM "Employee" ${EXCLUDE_STAFF_JOIN} ${where} ORDER BY "Employee"."id" ASC`)
+    .all(...params) as EmployeeRow[];
   return attachRelations(employees);
 }
 
@@ -232,7 +261,7 @@ const SCALAR_COLUMNS = [
 const RELATION_TABLES = {
   experience: { table: "Experience", columns: ["jobTitle", "company", "startDate", "endDate", "description"] },
   education: { table: "Education", columns: ["degree", "fieldOfStudy", "institution", "graduationYear", "gpa"] },
-  certificates: { table: "Certificate", columns: ["certName", "issuer", "issueDate", "expiryDate", "rawText"] },
+  certificates: { table: "Certificate", columns: ["certName", "issuer", "issueDate", "expiryDate", "rawText", "attachmentPath"] },
   skills: { table: "Skill", columns: ["category", "name", "proficiency"] },
   performanceReviews: { table: "PerformanceReview", columns: ["quarter", "year", "score"] },
 } as const;

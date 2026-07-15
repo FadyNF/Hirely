@@ -202,27 +202,36 @@ export async function matchTopProfiles(
   const requirements = await extractJobRequirements(jobDescription);
   const searchText = buildRequirementText(requirements);
 
-  const conditions: string[] = [];
+  // An admin/root's own linked Employee record is never a job-matching
+  // candidate either — same live "User.id IS NULL OR User.role =
+  // 'employee'" condition lib/employees.ts's company-wide queries use, not
+  // duplicated through a shared helper since this query already lives on
+  // its own raw-SQL path outside lib/employees.ts.
+  const conditions: string[] = [`("User"."id" IS NULL OR "User"."role" = 'employee')`];
   const params: (string | number)[] = [];
   if (requirements.nationality) {
-    conditions.push(`"nationality" = ?`);
+    conditions.push(`"Employee"."nationality" = ?`);
     params.push(requirements.nationality);
   }
   if (requirements.gender) {
-    conditions.push(`"gender" = ?`);
+    conditions.push(`"Employee"."gender" = ?`);
     params.push(requirements.gender);
   }
   if (requirements.totalExperience != null && !isNaN(requirements.totalExperience)) {
-    conditions.push(`"totalExperience" >= ?`);
+    conditions.push(`"Employee"."totalExperience" >= ?`);
     params.push(requirements.totalExperience);
   }
   if (requirements.yearsExpElsewedy != null && !isNaN(requirements.yearsExpElsewedy)) {
-    conditions.push(`"yearsExpElsewedy" >= ?`);
+    conditions.push(`"Employee"."yearsExpElsewedy" >= ?`);
     params.push(requirements.yearsExpElsewedy);
   }
 
-  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-  const employees = db.prepare(`SELECT "id" FROM "Employee" ${whereClause}`).all(...params) as { id: number }[];
+  const whereClause = `WHERE ${conditions.join(" AND ")}`;
+  const employees = db
+    .prepare(
+      `SELECT "Employee"."id" FROM "Employee" LEFT JOIN "User" ON "User"."id" = "Employee"."userId" ${whereClause}`
+    )
+    .all(...params) as { id: number }[];
 
   const employeeIds = employees.map((employee) => employee.id);
   if (employeeIds.length === 0) {
