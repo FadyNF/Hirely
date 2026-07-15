@@ -1,11 +1,14 @@
 import type { NextConfig } from "next";
+import "dotenv/config";
 
 // This file configures Next.js itself — separate from your app's own code.
 // The one thing we need it for right now is the "rewrites" function below.
 
-const nextConfig: NextConfig = {
-  serverExternalPackages: ["pdf-parse", "@napi-rs/canvas"],
+const ipAddress = process.env["IP_ADDRESS"]
 
+const nextConfig: NextConfig = {
+  allowedDevOrigins: ipAddress ? [ipAddress] : [],
+  serverExternalPackages: ["pdf-parse", "@napi-rs/canvas"],
   async rewrites() {
     return {
       // "beforeFiles" means: check these rules BEFORE Next.js looks at its
